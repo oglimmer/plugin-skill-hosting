@@ -23,6 +23,7 @@ type Config struct {
 	PublicBaseURL string
 
 	MarketplaceName string
+	DefaultLicense  string
 
 	AuthMode string // "password" (default) or "oidc"
 
@@ -42,6 +43,7 @@ func loadConfig() Config {
 		PublicBaseURL: getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
 
 		MarketplaceName: getenv("MARKETPLACE_NAME", "oglimmer-marketplace"),
+		DefaultLicense:  getenv("DEFAULT_LICENSE", "MIT"),
 
 		AuthMode: strings.ToLower(getenv("AUTH_MODE", "password")),
 

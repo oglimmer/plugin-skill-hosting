@@ -9,6 +9,9 @@ publicBaseURL: "https://ai-plugins.oglimmer.com"
 # Name shown in marketplace.json (also used as the owner name).
 marketplaceName: "oglimmer-marketplace"
 
+# Default license prefilled in the "new plugin" form.
+defaultLicense: "MIT"
+
 # Authentication mode: "password" (built-in email/password + JWT) or "oidc"
 # (OpenID Connect Authorization Code flow). When mode=oidc, the sealed secret
 # must additionally carry OIDC_CLIENT_SECRET; the other OIDC_* values are

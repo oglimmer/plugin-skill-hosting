@@ -2,15 +2,18 @@
 import { ref } from 'vue'
 import { api } from '../api'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
 const name = ref('')
 const description = ref('')
 const version = ref('0.1.0')
-const authorName = ref('')
-const authorEmail = ref('')
+const authorName = ref(authStore.user?.username ?? '')
+const authorEmail = ref(authStore.user?.email ?? '')
 const homepage = ref('')
-const license = ref('MIT')
+const license = ref(authStore.defaultLicense)
+authStore.ensureMode().then(() => { license.value = authStore.defaultLicense })
 const error = ref('')
 const loading = ref(false)
 

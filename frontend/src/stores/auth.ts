@@ -7,6 +7,7 @@ export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('token'))
   const mode = ref<AuthMode | null>(null)
   const marketplaceName = ref<string>('')
+  const defaultLicense = ref<string>('MIT')
   let modePromise: Promise<AuthMode> | null = null
 
   function loadUser(): User | null {
@@ -28,6 +29,7 @@ export const useAuthStore = defineStore('auth', () => {
       modePromise = api.authConfig().then(c => {
         mode.value = c.mode
         marketplaceName.value = c.marketplaceName
+        defaultLicense.value = c.defaultLicense
         return c.mode
       })
     }
@@ -70,7 +72,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    user, token, mode, marketplaceName, ensureMode,
+    user, token, mode, marketplaceName, defaultLicense, ensureMode,
     login, register, loginViaOIDC, logout, setSession,
     refreshUser, regenerateToken,
   }

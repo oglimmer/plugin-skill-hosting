@@ -294,11 +294,13 @@ func (a *App) handleRegenerateAPIToken(w http.ResponseWriter, r *http.Request) {
 type authConfigResp struct {
 	Mode            string `json:"mode"`
 	MarketplaceName string `json:"marketplaceName"`
+	DefaultLicense  string `json:"defaultLicense"`
 }
 
 func (a *App) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, authConfigResp{
 		Mode:            a.cfg.AuthMode,
 		MarketplaceName: a.cfg.MarketplaceName,
+		DefaultLicense:  a.cfg.DefaultLicense,
 	})
 }

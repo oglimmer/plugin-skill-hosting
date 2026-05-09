@@ -58,6 +58,7 @@ export type AuthMode = 'password' | 'oidc'
 export interface AuthConfig {
   mode: AuthMode
   marketplaceName: string
+  defaultLicense: string
 }
 
 export const api = {
