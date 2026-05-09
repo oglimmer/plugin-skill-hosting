@@ -22,6 +22,7 @@ services:
       LISTEN_ADDR: ":8080"
       DATA_DIR: /data
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      MARKETPLACE_NAME: ${MARKETPLACE_NAME:-oglimmer-marketplace}
       # Auth: "password" (default, dev) or "oidc"
       AUTH_MODE: ${AUTH_MODE:-password}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}

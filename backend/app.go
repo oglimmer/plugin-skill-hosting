@@ -17,6 +17,7 @@ type User struct {
 	ID        string    `json:"id"`
 	Email     string    `json:"email"`
 	Username  string    `json:"username"`
+	APIToken  string    `json:"apiToken,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -39,6 +40,8 @@ type marketplaceDoc struct {
 }
 
 func (a *App) handleMarketplaceJSON(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+
 	rows, err := a.db.QueryContext(r.Context(), `
 		SELECT p.name, p.description, p.version, p.author_name, p.author_email, p.homepage, p.license
 		FROM plugins p ORDER BY p.name ASC
@@ -50,10 +53,15 @@ func (a *App) handleMarketplaceJSON(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	base := strings.TrimRight(a.cfg.PublicBaseURL, "/")
+	authedBase := embedTokenInBase(base, user.APIToken)
+	name := a.cfg.MarketplaceName
+	if name == "" {
+		name = "oglimmer-marketplace"
+	}
 	doc := marketplaceDoc{
-		Name: "self-hosted-marketplace",
+		Name: name,
 		Owner: marketplaceOwner{
-			Name: "self-hosted",
+			Name: name,
 			URL:  base,
 		},
 		Plugins: []marketplacePlugin{},
@@ -73,7 +81,7 @@ func (a *App) handleMarketplaceJSON(w http.ResponseWriter, r *http.Request) {
 			License:     lic,
 			Source: marketplaceSource{
 				Source: "url",
-				URL:    base + "/git/" + name + ".git",
+				URL:    authedBase + "/git/" + name + ".git",
 			},
 		}
 		if an != "" || ae != "" {
@@ -85,4 +93,19 @@ func (a *App) handleMarketplaceJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(doc)
+}
+
+// embedTokenInBase returns base with the api token embedded as the HTTP Basic
+// Auth password (username "_"), so `git clone <url>` and Claude Code's fetch
+// of marketplace.json both authenticate without prompting.
+func embedTokenInBase(base, token string) string {
+	if token == "" {
+		return base
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+	u.User = url.UserPassword("_", token)
+	return strings.TrimRight(u.String(), "/")
 }

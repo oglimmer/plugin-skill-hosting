@@ -2,6 +2,7 @@ export interface User {
   id: string
   email: string
   username: string
+  apiToken?: string
 }
 
 export interface Plugin {
@@ -56,6 +57,7 @@ export type AuthMode = 'password' | 'oidc'
 
 export interface AuthConfig {
   mode: AuthMode
+  marketplaceName: string
 }
 
 export const api = {
@@ -71,6 +73,8 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   me: () => request<User>('/api/me'),
+  regenerateToken: () =>
+    request<{ apiToken: string }>('/api/me/token/regenerate', { method: 'POST' }),
   listPlugins: () => request<Plugin[]>('/api/plugins'),
   getPlugin: (name: string) => request<Plugin>(`/api/plugins/${name}`),
   createPlugin: (data: Partial<Plugin>) =>

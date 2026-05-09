@@ -10,14 +10,27 @@ const auth = useAuthStore()
 const plugin = ref<Plugin | null>(null)
 const loading = ref(true)
 const error = ref('')
+const copied = ref('')
 
 const isOwner = computed(() =>
   !!(plugin.value && auth.user && plugin.value.ownerId === auth.user.id),
 )
 
-const cloneUrl = computed(() =>
-  plugin.value ? `${window.location.origin}/git/${plugin.value.name}.git` : '',
-)
+const installCmd = computed(() => {
+  if (!plugin.value) return ''
+  const market = auth.marketplaceName
+  return market
+    ? `/plugin install ${plugin.value.name}@${market}`
+    : `/plugin install ${plugin.value.name}`
+})
+
+async function copy(text: string, label: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    copied.value = label
+    setTimeout(() => { if (copied.value === label) copied.value = '' }, 1500)
+  } catch {}
+}
 
 async function load() {
   loading.value = true
@@ -53,7 +66,10 @@ async function deletePlugin() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  auth.ensureMode()
+})
 </script>
 
 <template>
@@ -69,13 +85,16 @@ onMounted(load)
     <p class="muted" style="margin-top: 0">{{ plugin.description }}</p>
 
     <div class="card">
-      <h2>Plugin source</h2>
-      <p class="muted" style="margin-top: 0">
-        Claude Code clones this URL when installing the plugin from the marketplace:
+      <h2 style="margin-bottom: 4px">Install this plugin in Claude Code</h2>
+      <p class="muted" style="margin: 0 0 12px">
+        Make sure you've added the marketplace first (see the Plugins page).
       </p>
-      <pre>{{ cloneUrl }}</pre>
-      <h3>Test the clone</h3>
-      <pre>git clone {{ cloneUrl }}</pre>
+      <pre style="white-space: pre-wrap; word-break: break-all">{{ installCmd }}</pre>
+      <div class="row" style="gap: 8px">
+        <button class="secondary" type="button" @click="copy(installCmd, 'cmd')">
+          {{ copied === 'cmd' ? 'Copied' : 'Copy command' }}
+        </button>
+      </div>
     </div>
 
     <div class="card">

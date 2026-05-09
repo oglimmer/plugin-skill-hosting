@@ -18,9 +18,8 @@ function logout() {
   <nav class="top">
     <RouterLink to="/" class="brand">Plugin Marketplace</RouterLink>
     <div class="links">
-      <RouterLink to="/">Plugins</RouterLink>
-      <a href="/marketplace.json" target="_blank">marketplace.json</a>
       <template v-if="auth.user">
+        <RouterLink to="/">Plugins</RouterLink>
         <RouterLink to="/plugins/new" class="btn">+ New Plugin</RouterLink>
         <span class="user">{{ auth.user.username }}</span>
         <button class="secondary" @click="logout">Log out</button>

@@ -1,10 +1,12 @@
 # Plugin Marketplace Hosting
 
-A self-hosted Claude Code plugin marketplace. Developers sign up, create plugins, write skills via the web UI, and Claude Code installs them via:
+A self-hosted, **token-gated** Claude Code plugin marketplace. Developers sign up, create plugins, write skills via the web UI, and Claude Code installs them with the per-user URL shown after sign-in:
 
 ```
-/plugin marketplace add http://your-host/marketplace.json
+/plugin marketplace add https://_:<api-token>@your-host/marketplace.json
 ```
+
+Every endpoint that exposes plugin data — `marketplace.json`, the git smart-HTTP repos, and the read APIs — requires a valid token. The token is generated per user and shown on the front page. Anyone holding the token can clone repos and read the marketplace as that user.
 
 ## How it works
 
@@ -28,14 +30,21 @@ The backend keeps Postgres as the source of truth. Whenever you create, edit, or
 
 ## Authentication
 
-The backend supports two auth modes, picked at startup via `AUTH_MODE`:
+The backend supports two **sign-in** modes, picked at startup via `AUTH_MODE`:
 
 - `password` (default — used in dev): the built-in email/username/password flow with bcrypt + JWT.
 - `oidc`: server-side OpenID Connect Authorization Code flow. Users are auto-provisioned in the local `users` table on first login (matched by `(issuer, sub)`, then by verified `email`).
 
-In both modes the frontend stores the same JWT in `localStorage` and sends it as `Authorization: Bearer …`.
+Inside the SPA, sessions ride on a JWT in `localStorage` sent as `Authorization: Bearer <jwt>`.
 
-The frontend calls `GET /api/auth/config` on load to learn which mode is active and renders either the password form or the "Sign in with SSO" button.
+In addition, every user is issued a long-lived **API token** at registration. This token gates `/marketplace.json`, `/git/<plugin>.git/...`, and the read-only plugin APIs. It is accepted via:
+
+- `Authorization: Bearer <api-token>` — for API calls
+- HTTP Basic Auth where the **password** is the token (username can be anything, e.g. `_`) — for `git clone` and Claude Code's marketplace fetch
+
+The token is shown on the home page after sign-in and can be regenerated from there.
+
+The frontend calls `GET /api/auth/config` on load to learn which sign-in mode is active and renders either the password form or the "Sign in with SSO" button.
 
 ### OIDC config
 
@@ -61,15 +70,18 @@ docker compose up --build
 
 Then open <http://localhost:8080>:
 
-1. Sign up
+1. Sign up — your API token is generated and shown on the home page
 2. Create a plugin (e.g. `my-tools`)
 3. Open it and add a skill (e.g. `summarize`) with a description and Markdown body
-4. Visit <http://localhost:8080/marketplace.json> — the new plugin is listed
+4. Copy the marketplace command from the home page — it includes your token, e.g.
+   `/plugin marketplace add http://_:<token>@localhost:8080/marketplace.json`
 5. From any Claude Code project run:
    ```
-   /plugin marketplace add http://localhost:8080/marketplace.json
+   /plugin marketplace add http://_:<token>@localhost:8080/marketplace.json
    /plugin install my-tools
    ```
+
+Without the token, every `marketplace.json` and `/git/...` request gets a `401 Unauthorized`.
 
 > **Note** — for Claude Code to clone from your host, the URL in `marketplace.json` must be reachable from the user's machine. For local testing, `http://localhost:8080` works only from your machine. For other users, set `PUBLIC_BASE_URL` in `.env` to a reachable URL (e.g. an ngrok tunnel or a public DNS name).
 
@@ -163,18 +175,19 @@ npm run dev    # http://localhost:5173 with proxy to backend
 ## API surface
 
 Public:
-- `GET /marketplace.json` — the marketplace document
-- `GET /git/<plugin>.git/...` — git smart HTTP (clone-only)
-- `GET /api/plugins` — list all plugins
-- `GET /api/plugins/:name` — plugin + its skills
 - `GET /api/auth/config` → `{ "mode": "password" | "oidc" }`
-
-Auth (JWT in `Authorization: Bearer …`):
 - `POST /api/auth/register` `{email, username, password}` → `{token, user}` *(only when `AUTH_MODE=password`)*
 - `POST /api/auth/login` `{email, password}` → `{token, user}` *(only when `AUTH_MODE=password`)*
 - `GET  /api/auth/oidc/login` → 302 to IdP *(only when `AUTH_MODE=oidc`)*
 - `GET  /api/auth/oidc/callback` → 302 to `${PUBLIC_BASE_URL}/auth/callback#token=…&user=…` *(only when `AUTH_MODE=oidc`)*
-- `GET  /api/me`
+
+Token-gated (Bearer JWT/API token, or HTTP Basic with token as password):
+- `GET /marketplace.json` — the marketplace document. URLs inside it embed the requesting user's token as Basic-Auth credentials so subsequent `git clone` works.
+- `GET /git/<plugin>.git/...` — git smart HTTP (clone-only). On unauthenticated requests responds with `WWW-Authenticate: Basic` so `git clone` prompts.
+- `GET /api/plugins` — list all plugins
+- `GET /api/plugins/:name` — plugin + its skills
+- `GET /api/me` — returns the user incl. `apiToken`
+- `POST /api/me/token/regenerate` → `{ apiToken }` — invalidates the previous token
 - `POST /api/plugins`
 - `DELETE /api/plugins/:name`
 - `POST /api/plugins/:name/skills` `{name, description, body}`
@@ -214,7 +227,7 @@ description: One-line summary Claude uses to decide when to apply this skill
 This is an MVP / proof-of-concept:
 
 - No email verification, password reset, or rate limiting
-- No private plugins or per-user marketplaces — single global marketplace
+- Single global marketplace gated by per-user tokens — every authenticated user sees every plugin (the token only controls *access*, not visibility)
 - No SKILL.md frontmatter beyond `name` and `description` (no `allowed-tools`, `arguments`, etc.)
 - No commands, agents, hooks, or MCP servers — only skills
 - Force-push on every change (acceptable for a marketplace, not for a real git repo)
@@ -226,8 +239,16 @@ Each of these is straightforward to add later — the data model and API leave r
 Once both backend and Postgres are running and you have a plugin called `my-tools` with one skill, you should be able to:
 
 ```bash
-git clone http://localhost:8080/git/my-tools.git
+TOKEN=<copy-from-the-home-page>
+curl -s -u _:$TOKEN http://localhost:8080/marketplace.json | jq .
+git clone http://_:$TOKEN@localhost:8080/git/my-tools.git
 ls my-tools/.claude-plugin/plugin.json my-tools/skills/*/SKILL.md
 ```
 
-If that works, Claude Code will be able to install it.
+Without the token, both requests return `401 Unauthorized`.
+
+If both work, Claude Code will be able to install the plugin via:
+
+```
+/plugin marketplace add http://_:$TOKEN@localhost:8080/marketplace.json
+```

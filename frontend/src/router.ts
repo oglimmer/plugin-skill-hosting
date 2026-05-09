@@ -12,12 +12,12 @@ import OIDCCallbackView from './views/OIDCCallbackView.vue'
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', component: PluginListView },
+    { path: '/', component: PluginListView, meta: { requiresAuth: true } },
     { path: '/login', component: LoginView },
     { path: '/register', component: RegisterView },
     { path: '/auth/callback', component: OIDCCallbackView },
     { path: '/plugins/new', component: NewPluginView, meta: { requiresAuth: true } },
-    { path: '/plugins/:name', component: PluginDetailView, props: true },
+    { path: '/plugins/:name', component: PluginDetailView, props: true, meta: { requiresAuth: true } },
     {
       path: '/plugins/:name/skills/new',
       component: SkillEditView,

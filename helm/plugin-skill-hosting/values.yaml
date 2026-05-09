@@ -6,6 +6,9 @@ replicaCount: 1
 # This is exposed to the backend as PUBLIC_BASE_URL and embedded in marketplace.json.
 publicBaseURL: "https://ai-plugins.oglimmer.com"
 
+# Name shown in marketplace.json (also used as the owner name).
+marketplaceName: "oglimmer-marketplace"
+
 # Authentication mode: "password" (built-in email/password + JWT) or "oidc"
 # (OpenID Connect Authorization Code flow). When mode=oidc, the sealed secret
 # must additionally carry OIDC_CLIENT_SECRET; the other OIDC_* values are

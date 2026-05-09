@@ -6,6 +6,7 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(loadUser())
   const token = ref<string | null>(localStorage.getItem('token'))
   const mode = ref<AuthMode | null>(null)
+  const marketplaceName = ref<string>('')
   let modePromise: Promise<AuthMode> | null = null
 
   function loadUser(): User | null {
@@ -26,6 +27,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (!modePromise) {
       modePromise = api.authConfig().then(c => {
         mode.value = c.mode
+        marketplaceName.value = c.marketplaceName
         return c.mode
       })
     }
@@ -50,5 +52,26 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('user')
   }
 
-  return { user, token, mode, ensureMode, login, register, loginViaOIDC, logout, setSession }
+  async function refreshUser() {
+    if (!token.value) return
+    const u = await api.me()
+    user.value = u
+    localStorage.setItem('user', JSON.stringify(u))
+  }
+
+  async function regenerateToken() {
+    const r = await api.regenerateToken()
+    if (user.value) {
+      const u = { ...user.value, apiToken: r.apiToken }
+      user.value = u
+      localStorage.setItem('user', JSON.stringify(u))
+    }
+    return r.apiToken
+  }
+
+  return {
+    user, token, mode, marketplaceName, ensureMode,
+    login, register, loginViaOIDC, logout, setSession,
+    refreshUser, regenerateToken,
+  }
 })

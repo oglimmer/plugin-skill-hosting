@@ -193,9 +193,9 @@ func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *o
 	// 1) match by (issuer, subject) — already linked
 	u := &User{}
 	err := a.db.QueryRowContext(ctx,
-		`SELECT id, email, username, created_at FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2`,
+		`SELECT id, email, username, api_token, created_at FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2`,
 		issuer, claims.Sub,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.CreatedAt)
 	if err == nil {
 		return u, nil
 	}
@@ -207,8 +207,8 @@ func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *o
 	email := strings.ToLower(strings.TrimSpace(claims.Email))
 	if email != "" && (claims.EmailVerified == nil || *claims.EmailVerified) {
 		err = a.db.QueryRowContext(ctx,
-			`SELECT id, email, username, created_at FROM users WHERE email = $1`, email,
-		).Scan(&u.ID, &u.Email, &u.Username, &u.CreatedAt)
+			`SELECT id, email, username, api_token, created_at FROM users WHERE email = $1`, email,
+		).Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.CreatedAt)
 		if err == nil {
 			if _, err := a.db.ExecContext(ctx,
 				`UPDATE users SET oidc_issuer = $1, oidc_subject = $2 WHERE id = $3`,
@@ -232,11 +232,15 @@ func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *o
 	if err != nil {
 		return nil, err
 	}
+	apiTok, err := generateAPIToken()
+	if err != nil {
+		return nil, err
+	}
 	var id string
 	err = a.db.QueryRowContext(ctx,
-		`INSERT INTO users (email, username, oidc_issuer, oidc_subject)
-		 VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
-		email, username, issuer, claims.Sub,
+		`INSERT INTO users (email, username, oidc_issuer, oidc_subject, api_token)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+		email, username, issuer, claims.Sub, apiTok,
 	).Scan(&id, &u.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -244,6 +248,7 @@ func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *o
 	u.ID = id
 	u.Email = email
 	u.Username = username
+	u.APIToken = apiTok
 	return u, nil
 }
 

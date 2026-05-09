@@ -22,6 +22,8 @@ type Config struct {
 	DataDir       string
 	PublicBaseURL string
 
+	MarketplaceName string
+
 	AuthMode string // "password" (default) or "oidc"
 
 	OIDCIssuerURL    string
@@ -38,6 +40,8 @@ func loadConfig() Config {
 		ListenAddr:    getenv("LISTEN_ADDR", ":8080"),
 		DataDir:       getenv("DATA_DIR", "./data"),
 		PublicBaseURL: getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
+
+		MarketplaceName: getenv("MARKETPLACE_NAME", "oglimmer-marketplace"),
 
 		AuthMode: strings.ToLower(getenv("AUTH_MODE", "password")),
 
@@ -109,8 +113,11 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
-	r.Get("/marketplace.json", app.handleMarketplaceJSON)
-	r.Mount("/git", app.gitHandler())
+	r.Group(func(r chi.Router) {
+		r.Use(app.tokenGateMiddleware)
+		r.Get("/marketplace.json", app.handleMarketplaceJSON)
+		r.Mount("/git", app.gitHandler())
+	})
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/auth/config", app.handleAuthConfig)
@@ -124,12 +131,12 @@ func main() {
 			r.Get("/auth/oidc/callback", app.handleOIDCCallback)
 		}
 
-		r.Get("/plugins", app.handleListPlugins)
-		r.Get("/plugins/{name}", app.handleGetPlugin)
-
 		r.Group(func(r chi.Router) {
 			r.Use(app.authMiddleware)
 			r.Get("/me", app.handleMe)
+			r.Post("/me/token/regenerate", app.handleRegenerateAPIToken)
+			r.Get("/plugins", app.handleListPlugins)
+			r.Get("/plugins/{name}", app.handleGetPlugin)
 			r.Post("/plugins", app.handleCreatePlugin)
 			r.Delete("/plugins/{name}", app.handleDeletePlugin)
 			r.Post("/plugins/{name}/skills", app.handleCreateSkill)
