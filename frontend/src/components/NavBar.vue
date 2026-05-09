@@ -10,7 +10,7 @@ onMounted(() => { auth.ensureMode() })
 
 function logout() {
   auth.logout()
-  router.push('/')
+  router.push('/login')
 }
 </script>
 
