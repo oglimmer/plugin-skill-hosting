@@ -13,7 +13,6 @@ const loading = ref(true)
 const error = ref('')
 const tokenError = ref('')
 const regenerating = ref(false)
-const showToken = ref(false)
 const copied = ref('')
 
 const apiToken = computed(() => auth.user?.apiToken ?? '')
@@ -76,33 +75,10 @@ onMounted(load)
   <h1>Plugins</h1>
 
   <div class="card">
-    <h2 style="margin-bottom: 4px">Your marketplace access</h2>
+    <h2 style="margin-bottom: 4px">Add this marketplace in Claude Code</h2>
     <p class="muted" style="margin: 0 0 12px">
-      Anyone with this token can fetch the marketplace and clone plugin repos as you.
-      Keep it secret. Regenerate if it leaks.
+      The command below contains your personal API token. Keep it secret.
     </p>
-
-    <label style="display:block; margin-top: 8px">API token</label>
-    <div class="row" style="gap: 8px; align-items: stretch">
-      <input
-        :type="showToken ? 'text' : 'password'"
-        :value="apiToken"
-        readonly
-        style="flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace"
-      />
-      <button class="secondary" type="button" @click="showToken = !showToken">
-        {{ showToken ? 'Hide' : 'Show' }}
-      </button>
-      <button class="secondary" type="button" @click="copy(apiToken, 'token')">
-        {{ copied === 'token' ? 'Copied' : 'Copy' }}
-      </button>
-      <button class="danger" type="button" :disabled="regenerating" @click="regenerate">
-        {{ regenerating ? 'Regenerating…' : 'Regenerate' }}
-      </button>
-    </div>
-    <div v-if="tokenError" class="error" style="margin-top: 8px">{{ tokenError }}</div>
-
-    <h3 style="margin-top: 20px; margin-bottom: 4px">Add this marketplace in Claude Code</h3>
     <pre style="white-space: pre-wrap; word-break: break-all">{{ marketplaceCmd }}</pre>
     <div class="row" style="gap: 8px">
       <button class="secondary" type="button" @click="copy(marketplaceCmd, 'cmd')">
@@ -112,6 +88,25 @@ onMounted(load)
         {{ copied === 'url' ? 'Copied' : 'Copy URL' }}
       </button>
     </div>
+
+    <details style="margin-top: 20px">
+      <summary class="muted" style="cursor: pointer">Advanced: raw API token</summary>
+      <div class="row" style="gap: 8px; align-items: stretch; margin-top: 8px">
+        <input
+          type="text"
+          :value="apiToken"
+          readonly
+          style="flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace"
+        />
+        <button class="secondary" type="button" @click="copy(apiToken, 'token')">
+          {{ copied === 'token' ? 'Copied' : 'Copy' }}
+        </button>
+        <button class="danger" type="button" :disabled="regenerating" @click="regenerate">
+          {{ regenerating ? 'Regenerating…' : 'Regenerate' }}
+        </button>
+      </div>
+      <div v-if="tokenError" class="error" style="margin-top: 8px">{{ tokenError }}</div>
+    </details>
   </div>
 
   <div v-if="loading" class="muted">Loading…</div>
