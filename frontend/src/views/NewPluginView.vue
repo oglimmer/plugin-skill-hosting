@@ -8,7 +8,6 @@ const router = useRouter()
 const authStore = useAuthStore()
 const name = ref('')
 const description = ref('')
-const version = ref('0.1.0')
 const authorName = ref(authStore.user?.username ?? '')
 const authorEmail = ref(authStore.user?.email ?? '')
 const homepage = ref('')
@@ -24,7 +23,6 @@ async function submit() {
     const p = await api.createPlugin({
       name: name.value,
       description: description.value,
-      version: version.value,
       authorName: authorName.value,
       authorEmail: authorEmail.value,
       homepage: homepage.value,
@@ -49,16 +47,8 @@ async function submit() {
       <label>Description</label>
       <input v-model="description" required />
 
-      <div class="row" style="gap: 12px">
-        <div style="flex: 1">
-          <label>Version</label>
-          <input v-model="version" />
-        </div>
-        <div style="flex: 1">
-          <label>License</label>
-          <input v-model="license" />
-        </div>
-      </div>
+      <label>License</label>
+      <input v-model="license" />
 
       <div class="row" style="gap: 12px">
         <div style="flex: 1">

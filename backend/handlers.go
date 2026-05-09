@@ -302,15 +302,26 @@ func (a *App) handleCreatePlugin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "name must be 3-64 chars, lowercase, [a-z0-9-]")
 		return
 	}
-	if req.Version == "" {
-		req.Version = "0.1.0"
+
+	// Version is auto-managed: first plugin per owner stays at 0.1.0; every
+	// subsequent plugin starts with the major bumped to 1.0.0. Any version the
+	// client sends is ignored.
+	var ownerPluginCount int
+	if err := a.db.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM plugins WHERE owner_id = $1`, user.ID).Scan(&ownerPluginCount); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	version := "0.1.0"
+	if ownerPluginCount > 0 {
+		version = "1.0.0"
 	}
 
 	var id string
 	err := a.db.QueryRowContext(r.Context(), `
 		INSERT INTO plugins (owner_id, name, description, version, author_name, author_email, homepage, license)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
-	`, user.ID, req.Name, req.Description, req.Version, req.AuthorName, req.AuthorEmail, req.Homepage, req.License).Scan(&id)
+	`, user.ID, req.Name, req.Description, version, req.AuthorName, req.AuthorEmail, req.Homepage, req.License).Scan(&id)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			writeErr(w, http.StatusConflict, "plugin name already taken")
@@ -441,6 +452,15 @@ func (a *App) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Count skills (including soft-deleted) before insert so the very first
+	// skill ever added to this plugin doesn't bump the version.
+	var existingSkillCount int
+	if err := a.db.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM skills WHERE plugin_id = $1`, p.ID).Scan(&existingSkillCount); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
 	var id string
 	err = a.db.QueryRowContext(r.Context(), `
 		INSERT INTO skills (plugin_id, name, description, body, created_by, updated_by)
@@ -458,7 +478,11 @@ func (a *App) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if _, err := a.db.ExecContext(r.Context(), `UPDATE plugins SET updated_at = now() WHERE id = $1`, p.ID); err != nil {
+	if existingSkillCount > 0 {
+		p.Version = bumpVersion(p.Version, bumpMinor)
+	}
+	if _, err := a.db.ExecContext(r.Context(),
+		`UPDATE plugins SET version = $1, updated_at = now() WHERE id = $2`, p.Version, p.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -516,7 +540,9 @@ func (a *App) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if _, err := a.db.ExecContext(r.Context(), `UPDATE plugins SET updated_at = now() WHERE id = $1`, p.ID); err != nil {
+	p.Version = bumpVersion(p.Version, bumpPatch)
+	if _, err := a.db.ExecContext(r.Context(),
+		`UPDATE plugins SET version = $1, updated_at = now() WHERE id = $2`, p.Version, p.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -563,7 +589,9 @@ func (a *App) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if _, err := a.db.ExecContext(r.Context(), `UPDATE plugins SET updated_at = now() WHERE id = $1`, p.ID); err != nil {
+	p.Version = bumpVersion(p.Version, bumpMinor)
+	if _, err := a.db.ExecContext(r.Context(),
+		`UPDATE plugins SET version = $1, updated_at = now() WHERE id = $2`, p.Version, p.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -643,7 +671,9 @@ func (a *App) handleRestoreSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if _, err := a.db.ExecContext(r.Context(), `UPDATE plugins SET updated_at = now() WHERE id = $1`, p.ID); err != nil {
+	p.Version = bumpVersion(p.Version, bumpMinor)
+	if _, err := a.db.ExecContext(r.Context(),
+		`UPDATE plugins SET version = $1, updated_at = now() WHERE id = $2`, p.Version, p.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -789,7 +819,9 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if _, err := a.db.ExecContext(r.Context(), `UPDATE plugins SET updated_at = now() WHERE id = $1`, p.ID); err != nil {
+	p.Version = bumpVersion(p.Version, bumpPatch)
+	if _, err := a.db.ExecContext(r.Context(),
+		`UPDATE plugins SET version = $1, updated_at = now() WHERE id = $2`, p.Version, p.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
