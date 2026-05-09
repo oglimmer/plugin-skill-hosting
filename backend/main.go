@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +21,14 @@ type Config struct {
 	ListenAddr    string
 	DataDir       string
 	PublicBaseURL string
+
+	AuthMode string // "password" (default) or "oidc"
+
+	OIDCIssuerURL    string
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCRedirectURL  string // defaults to PublicBaseURL + "/auth/callback/oidc"
+	OIDCScopes       string // space-separated; defaults to "openid email profile"
 }
 
 func loadConfig() Config {
@@ -29,6 +38,20 @@ func loadConfig() Config {
 		ListenAddr:    getenv("LISTEN_ADDR", ":8080"),
 		DataDir:       getenv("DATA_DIR", "./data"),
 		PublicBaseURL: getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
+
+		AuthMode: strings.ToLower(getenv("AUTH_MODE", "password")),
+
+		OIDCIssuerURL:    strings.TrimRight(getenv("OIDC_ISSUER_URL", ""), "/"),
+		OIDCClientID:     getenv("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret: getenv("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:  getenv("OIDC_REDIRECT_URL", ""),
+		OIDCScopes:       getenv("OIDC_SCOPES", "openid email profile"),
+	}
+	if c.AuthMode != "password" && c.AuthMode != "oidc" {
+		log.Fatalf("AUTH_MODE must be 'password' or 'oidc', got %q", c.AuthMode)
+	}
+	if c.OIDCRedirectURL == "" {
+		c.OIDCRedirectURL = strings.TrimRight(c.PublicBaseURL, "/") + "/api/auth/oidc/callback"
 	}
 	return c
 }
@@ -62,6 +85,12 @@ func main() {
 
 	app := &App{cfg: cfg, db: db}
 
+	if cfg.AuthMode == "oidc" {
+		if err := app.initOIDC(context.Background()); err != nil {
+			log.Fatalf("oidc init: %v", err)
+		}
+	}
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -84,8 +113,16 @@ func main() {
 	r.Mount("/git", app.gitHandler())
 
 	r.Route("/api", func(r chi.Router) {
-		r.Post("/auth/register", app.handleRegister)
-		r.Post("/auth/login", app.handleLogin)
+		r.Get("/auth/config", app.handleAuthConfig)
+
+		switch cfg.AuthMode {
+		case "password":
+			r.Post("/auth/register", app.handleRegister)
+			r.Post("/auth/login", app.handleLogin)
+		case "oidc":
+			r.Get("/auth/oidc/login", app.handleOIDCLogin)
+			r.Get("/auth/oidc/callback", app.handleOIDCCallback)
+		}
 
 		r.Get("/plugins", app.handleListPlugins)
 		r.Get("/plugins/{name}", app.handleGetPlugin)

@@ -52,7 +52,14 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export type AuthMode = 'password' | 'oidc'
+
+export interface AuthConfig {
+  mode: AuthMode
+}
+
 export const api = {
+  authConfig: () => request<AuthConfig>('/api/auth/config'),
   register: (email: string, username: string, password: string) =>
     request<{ token: string; user: User }>('/api/auth/register', {
       method: 'POST',

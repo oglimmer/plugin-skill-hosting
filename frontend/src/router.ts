@@ -7,6 +7,7 @@ import NewPluginView from './views/NewPluginView.vue'
 import SkillEditView from './views/SkillEditView.vue'
 import LoginView from './views/LoginView.vue'
 import RegisterView from './views/RegisterView.vue'
+import OIDCCallbackView from './views/OIDCCallbackView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -14,6 +15,7 @@ export const router = createRouter({
     { path: '/', component: PluginListView },
     { path: '/login', component: LoginView },
     { path: '/register', component: RegisterView },
+    { path: '/auth/callback', component: OIDCCallbackView },
     { path: '/plugins/new', component: NewPluginView, meta: { requiresAuth: true } },
     { path: '/plugins/:name', component: PluginDetailView, props: true },
     {

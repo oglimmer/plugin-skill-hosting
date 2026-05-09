@@ -1,10 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, type User } from '../api'
+import { api, type AuthMode, type User } from '../api'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(loadUser())
   const token = ref<string | null>(localStorage.getItem('token'))
+  const mode = ref<AuthMode | null>(null)
+  let modePromise: Promise<AuthMode> | null = null
 
   function loadUser(): User | null {
     const raw = localStorage.getItem('user')
@@ -19,6 +21,17 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('user', JSON.stringify(u))
   }
 
+  async function ensureMode(): Promise<AuthMode> {
+    if (mode.value) return mode.value
+    if (!modePromise) {
+      modePromise = api.authConfig().then(c => {
+        mode.value = c.mode
+        return c.mode
+      })
+    }
+    return modePromise
+  }
+
   async function login(email: string, password: string) {
     const r = await api.login(email, password)
     setSession(r.token, r.user)
@@ -27,6 +40,9 @@ export const useAuthStore = defineStore('auth', () => {
     const r = await api.register(email, username, password)
     setSession(r.token, r.user)
   }
+  function loginViaOIDC() {
+    window.location.href = '/api/auth/oidc/login'
+  }
   function logout() {
     token.value = null
     user.value = null
@@ -34,5 +50,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('user')
   }
 
-  return { user, token, login, register, logout }
+  return { user, token, mode, ensureMode, login, register, loginViaOIDC, logout, setSession }
 })

@@ -22,6 +22,13 @@ services:
       LISTEN_ADDR: ":8080"
       DATA_DIR: /data
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      # Auth: "password" (default, dev) or "oidc"
+      AUTH_MODE: ${AUTH_MODE:-password}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
     volumes:
       - repo_data:/data
     depends_on:

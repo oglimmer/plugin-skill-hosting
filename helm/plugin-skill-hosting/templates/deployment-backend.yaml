@@ -70,6 +70,23 @@ spec:
             secretKeyRef:
               name: {{ include "psh.secretName" . }}
               key: JWT_SECRET
+        - name: AUTH_MODE
+          value: {{ .Values.auth.mode | quote }}
+        {{- if eq .Values.auth.mode "oidc" }}
+        - name: OIDC_ISSUER_URL
+          value: {{ .Values.auth.oidc.issuerURL | quote }}
+        - name: OIDC_CLIENT_ID
+          value: {{ .Values.auth.oidc.clientID | quote }}
+        - name: OIDC_REDIRECT_URL
+          value: {{ .Values.auth.oidc.redirectURL | quote }}
+        - name: OIDC_SCOPES
+          value: {{ .Values.auth.oidc.scopes | quote }}
+        - name: OIDC_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "psh.secretName" . }}
+              key: OIDC_CLIENT_SECRET
+        {{- end }}
         volumeMounts:
         - name: data
           mountPath: /data

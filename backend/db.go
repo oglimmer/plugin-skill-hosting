@@ -12,6 +12,9 @@ import (
 //go:embed migrations/0001_init.sql
 var migration0001 string
 
+//go:embed migrations/0002_oidc.sql
+var migration0002 string
+
 func openDB(url string) (*sql.DB, error) {
 	db, err := sql.Open("postgres", url)
 	if err != nil {
@@ -29,6 +32,9 @@ func openDB(url string) (*sql.DB, error) {
 func runMigrations(db *sql.DB) error {
 	if _, err := db.Exec(migration0001); err != nil {
 		return fmt.Errorf("0001_init: %w", err)
+	}
+	if _, err := db.Exec(migration0002); err != nil {
+		return fmt.Errorf("0002_oidc: %w", err)
 	}
 	return nil
 }

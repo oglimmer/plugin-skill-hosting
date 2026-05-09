@@ -6,6 +6,19 @@ replicaCount: 1
 # This is exposed to the backend as PUBLIC_BASE_URL and embedded in marketplace.json.
 publicBaseURL: "https://ai-plugins.oglimmer.com"
 
+# Authentication mode: "password" (built-in email/password + JWT) or "oidc"
+# (OpenID Connect Authorization Code flow). When mode=oidc, the sealed secret
+# must additionally carry OIDC_CLIENT_SECRET; the other OIDC_* values are
+# read from below.
+auth:
+  mode: oidc
+  oidc:
+    issuerURL: "https://id.oglimmer.de/realms/oglimmer"
+    clientID: "plugin-skill-hosting"
+    # Defaults to "${publicBaseURL}/api/auth/oidc/callback" when empty.
+    redirectURL: ""
+    scopes: "openid email profile"
+
 # Backend (API + git smart-HTTP) configuration
 backend:
   name: api

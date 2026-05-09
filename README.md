@@ -26,6 +26,32 @@ The backend keeps Postgres as the source of truth. Whenever you create, edit, or
 - **Database**: Postgres 16
 - **Reverse proxy**: nginx (in the frontend container) — proxies `/api`, `/git`, `/marketplace.json` to the backend
 
+## Authentication
+
+The backend supports two auth modes, picked at startup via `AUTH_MODE`:
+
+- `password` (default — used in dev): the built-in email/username/password flow with bcrypt + JWT.
+- `oidc`: server-side OpenID Connect Authorization Code flow. Users are auto-provisioned in the local `users` table on first login (matched by `(issuer, sub)`, then by verified `email`).
+
+In both modes the frontend stores the same JWT in `localStorage` and sends it as `Authorization: Bearer …`.
+
+The frontend calls `GET /api/auth/config` on load to learn which mode is active and renders either the password form or the "Sign in with SSO" button.
+
+### OIDC config
+
+Set on the backend container:
+
+| Var | Required | Default |
+| --- | --- | --- |
+| `AUTH_MODE` | yes (set to `oidc`) | `password` |
+| `OIDC_ISSUER_URL` | yes | — |
+| `OIDC_CLIENT_ID` | yes | — |
+| `OIDC_CLIENT_SECRET` | yes | — |
+| `OIDC_REDIRECT_URL` | no | `${PUBLIC_BASE_URL}/api/auth/oidc/callback` |
+| `OIDC_SCOPES` | no | `openid email profile` |
+
+Register `${PUBLIC_BASE_URL}/api/auth/oidc/callback` as an allowed redirect URI in your IdP. After a successful exchange the backend redirects the browser to `${PUBLIC_BASE_URL}/auth/callback#token=…&user=…` (the SPA reads the hash and stores the session).
+
 ## Run locally with Docker Compose
 
 ```bash
@@ -141,10 +167,13 @@ Public:
 - `GET /git/<plugin>.git/...` — git smart HTTP (clone-only)
 - `GET /api/plugins` — list all plugins
 - `GET /api/plugins/:name` — plugin + its skills
+- `GET /api/auth/config` → `{ "mode": "password" | "oidc" }`
 
 Auth (JWT in `Authorization: Bearer …`):
-- `POST /api/auth/register` `{email, username, password}` → `{token, user}`
-- `POST /api/auth/login` `{email, password}` → `{token, user}`
+- `POST /api/auth/register` `{email, username, password}` → `{token, user}` *(only when `AUTH_MODE=password`)*
+- `POST /api/auth/login` `{email, password}` → `{token, user}` *(only when `AUTH_MODE=password`)*
+- `GET  /api/auth/oidc/login` → 302 to IdP *(only when `AUTH_MODE=oidc`)*
+- `GET  /api/auth/oidc/callback` → 302 to `${PUBLIC_BASE_URL}/auth/callback#token=…&user=…` *(only when `AUTH_MODE=oidc`)*
 - `GET  /api/me`
 - `POST /api/plugins`
 - `DELETE /api/plugins/:name`

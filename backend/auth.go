@@ -196,3 +196,11 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, currentUser(r))
 }
+
+type authConfigResp struct {
+	Mode string `json:"mode"`
+}
+
+func (a *App) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, authConfigResp{Mode: a.cfg.AuthMode})
+}

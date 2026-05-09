@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useRouter, useRoute } from 'vue-router'
 
@@ -10,6 +10,8 @@ const loading = ref(false)
 const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
+
+onMounted(() => { auth.ensureMode() })
 
 async function submit() {
   error.value = ''
@@ -29,20 +31,31 @@ async function submit() {
 <template>
   <h1>Log in</h1>
   <div class="card" style="max-width: 420px">
-    <form @submit.prevent="submit">
-      <label>Email</label>
-      <input v-model="email" type="email" required autocomplete="email" />
-      <label>Password</label>
-      <input v-model="password" type="password" required autocomplete="current-password" />
-      <div v-if="error" class="error">{{ error }}</div>
+    <template v-if="auth.mode === 'oidc'">
+      <p>Sign in with your single-sign-on provider.</p>
       <div style="margin-top: 16px">
-        <button type="submit" :disabled="loading">
-          {{ loading ? 'Logging in…' : 'Log in' }}
-        </button>
+        <button type="button" @click="auth.loginViaOIDC()">Sign in with SSO</button>
       </div>
-      <p class="muted" style="margin-top: 16px">
-        New here? <RouterLink to="/register">Create an account</RouterLink>
-      </p>
-    </form>
+    </template>
+    <template v-else-if="auth.mode === 'password'">
+      <form @submit.prevent="submit">
+        <label>Email</label>
+        <input v-model="email" type="email" required autocomplete="email" />
+        <label>Password</label>
+        <input v-model="password" type="password" required autocomplete="current-password" />
+        <div v-if="error" class="error">{{ error }}</div>
+        <div style="margin-top: 16px">
+          <button type="submit" :disabled="loading">
+            {{ loading ? 'Logging in…' : 'Log in' }}
+          </button>
+        </div>
+        <p class="muted" style="margin-top: 16px">
+          New here? <RouterLink to="/register">Create an account</RouterLink>
+        </p>
+      </form>
+    </template>
+    <template v-else>
+      <p class="muted">Loading…</p>
+    </template>
   </div>
 </template>

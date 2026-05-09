@@ -8,8 +8,9 @@ import (
 )
 
 type App struct {
-	cfg Config
-	db  *sql.DB
+	cfg  Config
+	db   *sql.DB
+	oidc *OIDCRuntime // populated only when cfg.AuthMode == "oidc"
 }
 
 type User struct {

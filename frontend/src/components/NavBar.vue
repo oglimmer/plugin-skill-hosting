@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useRouter, RouterLink } from 'vue-router'
 
 const auth = useAuthStore()
 const router = useRouter()
+
+onMounted(() => { auth.ensureMode() })
 
 function logout() {
   auth.logout()
@@ -24,7 +27,7 @@ function logout() {
       </template>
       <template v-else>
         <RouterLink to="/login">Log in</RouterLink>
-        <RouterLink to="/register" class="btn">Sign up</RouterLink>
+        <RouterLink v-if="auth.mode !== 'oidc'" to="/register" class="btn">Sign up</RouterLink>
       </template>
     </div>
   </nav>
