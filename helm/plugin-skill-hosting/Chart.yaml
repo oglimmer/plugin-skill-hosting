@@ -1,0 +1,13 @@
+apiVersion: v2
+name: plugin-skill-hosting
+description: Self-hosted Claude Code plugin marketplace (backend + frontend + Postgres + git over HTTPS)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Oli
+keywords:
+  - claude-code
+  - plugin
+  - marketplace
+  - skills

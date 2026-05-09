@@ -1,0 +1,32 @@
+1. Public URL:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+   https://{{ $host.host }}/
+{{- end }}
+{{- else }}
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "psh.frontend.fullname" . }} 8080:{{ .Values.frontend.service.port }}
+{{- end }}
+
+2. Marketplace URL to give to Claude Code users:
+   /plugin marketplace add {{ .Values.publicBaseURL }}/marketplace.json
+
+   Note: Claude Code rejects plain http:// plugin sources. publicBaseURL MUST
+   be https://; the ingress TLS secret ({{ (index .Values.ingress.tls 0).secretName }})
+   covers that.
+
+3. Before installing/upgrading, seal the application secret:
+
+   kubectl create secret generic {{ include "psh.secretName" . }} \
+     --dry-run=client -o yaml \
+{{- if .Values.postgres.enabled }}
+     --from-literal=POSTGRES_PASSWORD=<db-password> \
+     --from-literal=JWT_SECRET=<32+chars> \
+{{- else }}
+     --from-literal=DATABASE_URL='postgres://user:pass@host:5432/db?sslmode=require' \
+     --from-literal=JWT_SECRET=<32+chars> \
+{{- end }}
+     | kubeseal --format yaml > helm/plugin-skill-hosting/templates/sealed-secret.yaml
+
+4. Backend git data lives on PVC {{ include "psh.backend.fullname" . }}-data
+{{- if .Values.postgres.enabled }} and Postgres on {{ include "psh.postgres.fullname" . }}-data{{- end }}.
+   Snapshot/backup these before destroying the release.

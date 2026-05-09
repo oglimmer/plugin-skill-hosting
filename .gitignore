@@ -1,0 +1,8 @@
+.env
+backend/server
+backend/marketplace
+backend/data/
+node_modules/
+frontend/dist/
+.DS_Store
+*.log

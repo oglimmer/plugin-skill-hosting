@@ -1,0 +1,154 @@
+# Default values for plugin-skill-hosting
+
+replicaCount: 1
+
+# Public URL (must be HTTPS — Claude Code rejects http:// plugin sources).
+# This is exposed to the backend as PUBLIC_BASE_URL and embedded in marketplace.json.
+publicBaseURL: "https://ai-plugins.oglimmer.com"
+
+# Backend (API + git smart-HTTP) configuration
+backend:
+  name: api
+  image:
+    repository: registry.oglimmer.com/plugin-skill-hosting-backend
+    pullPolicy: Always
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # PVC holding the bare git repos and worktrees (DATA_DIR=/data)
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Frontend (nginx serving the SPA) configuration
+frontend:
+  name: web
+  image:
+    repository: registry.oglimmer.com/plugin-skill-hosting-frontend
+    pullPolicy: Always
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Bundled Postgres (single-replica, PVC-backed). Set enabled=false to use an
+# external database — then provide the full DSN via the sealed secret's
+# DATABASE_URL key and clear postgres.* below.
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  user: marketplace
+  database: marketplace
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Ingress configuration. Cert-manager + ingress-nginx pattern from the dsa chart.
+# Path order matters — backend paths must come BEFORE the frontend catch-all.
+ingress:
+  enabled: true
+  className: ""
+  annotations:
+    cert-manager.io/cluster-issuer: "oglimmer-com-dns"
+    # Git smart-HTTP needs request body buffering off and a generous body size
+    # for pushes; the nginx ingress defaults are fine for clones.
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+  hosts:
+    - host: ai-plugins.oglimmer.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          backend: api
+        - path: /git
+          pathType: Prefix
+          backend: api
+        - path: /marketplace.json
+          pathType: Exact
+          backend: api
+        - path: /healthz
+          pathType: Exact
+          backend: api
+        - path: /
+          pathType: Prefix
+          backend: web
+  tls:
+    - secretName: tls-plugin-skill-hosting-ingress-dns
+      hosts:
+        - ai-plugins.oglimmer.com
+
+# Service account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod-level security context. fsGroup matches the backend uid so the PVC is
+# group-writable.
+podSecurityContext:
+  fsGroup: 10001
+
+# Backend container security context. The Go binary runs as a non-root user;
+# git operations and writes to /data work as long as fsGroup matches.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+
+# Frontend (nginx) security context — nginx in the official image uses non-root
+# nginx user internally but binds to 80 via setcap; leave defaults.
+frontendSecurityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+imagePullSecrets:
+  - name: oglimmerregistrykey

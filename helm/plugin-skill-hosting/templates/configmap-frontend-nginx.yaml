@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psh.frontend.fullname" . }}-nginx
+  labels:
+    {{- include "psh.frontend.labels" . | nindent 4 }}
+data:
+  default.conf: |
+    server {
+        listen 80;
+        server_name _;
+
+        client_max_body_size 4m;
+
+        # SPA only — /api, /git, /marketplace.json, /healthz are handled by
+        # the ingress and routed directly to the backend service.
+        location / {
+            root /usr/share/nginx/html;
+            try_files $uri $uri/ /index.html;
+        }
+    }
