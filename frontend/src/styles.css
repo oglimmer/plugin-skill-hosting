@@ -133,7 +133,11 @@ nav.top .links a:hover {
   border-bottom-color: var(--accent);
 }
 nav.top .links a.btn,
-nav.top .links a.btn:hover { border-bottom: 0; }
+nav.top .links a.btn:hover {
+  border-bottom: 0;
+  /* Restore the global .btn padding that nav.top .links a otherwise overrides. */
+  padding: 11px 18px;
+}
 nav.top .user {
   font-family: var(--mono);
   font-size: 10.5px;
@@ -191,6 +195,9 @@ button, .btn {
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
+  /* Explicit line-height: <button> defaults to `normal` (~1.2), <a class="btn"> inherits 1.55.
+     Without this, anchor-buttons end up ~4px taller than real <button> elements. */
+  line-height: 1.55;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   cursor: pointer;
