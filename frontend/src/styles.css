@@ -26,6 +26,11 @@
 
 * { box-sizing: border-box; }
 
+html {
+  /* Always reserve space for the scrollbar so switching between long/short
+     views (e.g., tab panels) doesn't shift content horizontally. */
+  scrollbar-gutter: stable;
+}
 html, body, #app {
   margin: 0;
   padding: 0;
@@ -70,6 +75,9 @@ a:hover { color: var(--accent-2); }
 
 /* Main wrapper */
 main {
+  /* width: 100% is required because <main> is a flex item with auto cross-axis margins,
+     which suppress `align-items: stretch` and let it shrink-wrap to content. */
+  width: 100%;
   max-width: 1080px;
   margin: 0 auto;
   padding: 56px 32px 96px;
