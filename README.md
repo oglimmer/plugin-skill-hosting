@@ -224,6 +224,19 @@ npm install
 npm run dev    # http://localhost:5173 with proxy to backend
 ```
 
+## Tests
+
+Backend (pure unit tests, no DB needed):
+```bash
+cd backend && go test ./...
+```
+
+Frontend (Vitest + Testing Library, jsdom):
+```bash
+cd frontend && npm test           # one-shot
+cd frontend && npm run test:watch # watch mode
+```
+
 ## API surface
 
 Public:
