@@ -28,11 +28,13 @@ function logout() {
     <div class="links">
       <template v-if="auth.user">
         <RouterLink to="/">Plugins</RouterLink>
+        <RouterLink to="/developers">Developers</RouterLink>
         <RouterLink to="/plugins/new" class="btn">+ New plugin</RouterLink>
         <span class="user">{{ auth.user.username }}</span>
         <button class="secondary" @click="logout">Log out</button>
       </template>
       <template v-else>
+        <RouterLink to="/developers">Developers</RouterLink>
         <RouterLink to="/login">Log in</RouterLink>
         <RouterLink v-if="auth.mode !== 'oidc'" to="/register" class="btn">Sign up</RouterLink>
       </template>
