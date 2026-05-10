@@ -248,7 +248,9 @@ func (a *App) loadSkillByID(ctx context.Context, id string) (*Skill, error) {
 }
 
 // recordSkillVersion appends an entry to skill_versions for the given skill,
-// auto-incrementing the per-skill version number.
+// auto-incrementing the per-skill version number, and snapshots the current
+// skill_files tree into skill_file_versions so revert can restore both halves
+// of the skill (description+body and supporting files) atomically.
 func (a *App) recordSkillVersion(ctx context.Context, tx dbExec, skillID, action, name, description, body string, editedBy string) error {
 	var nextVersion int
 	if err := tx.QueryRowContext(ctx,
@@ -256,11 +258,14 @@ func (a *App) recordSkillVersion(ctx context.Context, tx dbExec, skillID, action
 		Scan(&nextVersion); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `
+	var versionID string
+	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO skill_versions (skill_id, version, action, name, description, body, edited_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, skillID, nextVersion, action, name, description, body, editedBy)
-	return err
+		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id
+	`, skillID, nextVersion, action, name, description, body, editedBy).Scan(&versionID); err != nil {
+		return err
+	}
+	return snapshotSkillFiles(ctx, tx, versionID, skillID)
 }
 
 // dbExec is the subset of *sql.DB / *sql.Tx we use; lets recordSkillVersion run
@@ -778,13 +783,14 @@ func (a *App) handleListSkillVersions(w http.ResponseWriter, r *http.Request) {
 // snapshot stored in skill_versions. Acts as both un-delete (if currently soft-
 // deleted) and content-rollback in one operation, and writes a new version row
 // of action=revert.
-// loadSkillVersionSnapshot fetches the description+body stored in a specific
-// skill_versions row, used to roll a skill back to a prior state.
-func (a *App) loadSkillVersionSnapshot(ctx context.Context, skillID, version string) (desc, body string, err error) {
+// loadSkillVersionSnapshot fetches the row id, description, and body of a
+// specific skill_versions entry. The id is used to look up the paired
+// skill_file_versions snapshot when reverting.
+func (a *App) loadSkillVersionSnapshot(ctx context.Context, skillID, version string) (versionID, desc, body string, err error) {
 	err = a.db.QueryRowContext(ctx, `
-		SELECT description, body FROM skill_versions
+		SELECT id, description, body FROM skill_versions
 		WHERE skill_id = $1 AND version = $2
-	`, skillID, version).Scan(&desc, &body)
+	`, skillID, version).Scan(&versionID, &desc, &body)
 	return
 }
 
@@ -807,7 +813,7 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetDesc, targetBody, err := a.loadSkillVersionSnapshot(r.Context(), skillID, versionStr)
+	targetVersionID, targetDesc, targetBody, err := a.loadSkillVersionSnapshot(r.Context(), skillID, versionStr)
 	if err == sql.ErrNoRows {
 		writeErr(w, http.StatusNotFound, "version not found")
 		return
@@ -830,6 +836,12 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 		WHERE id = $4
 	`, targetDesc, targetBody, user.ID, skillID); err != nil {
 		respondDBOrConflict(w, err, "an active skill with that name already exists")
+		return
+	}
+	// Restore the file tree from the snapshot before recording the new version,
+	// so the new "revert" version row captures the just-restored state.
+	if err := restoreSkillFilesFromVersion(r.Context(), a.db, skillID, targetVersionID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
 	if err := a.recordSkillVersion(r.Context(), a.db, skillID, "revert", skillName, targetDesc, targetBody, user.ID); err != nil {

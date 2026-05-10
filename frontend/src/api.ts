@@ -54,6 +54,17 @@ export interface SkillVersion {
   editedAt: string
 }
 
+export interface SkillFileSummary {
+  path: string
+  isBinary: boolean
+  sizeBytes: number
+  updatedAt: string
+}
+
+export interface SkillFile extends SkillFileSummary {
+  content: string // raw text when !isBinary, base64 when isBinary
+}
+
 function token(): string | null {
   return localStorage.getItem('token')
 }
@@ -134,11 +145,39 @@ export const api = {
     request<Skill>(`/api/plugins/${pluginName}/skills/${skillName}/revert/${version}`, {
       method: 'POST',
     }),
-  validateSkill: (data: { name: string; description: string; body: string }) =>
+  validateSkill: (data: {
+    name: string
+    description: string
+    body: string
+    files?: SkillFileSummary[]
+  }) =>
     request<ValidationReport>(`/api/skills/validate`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  listSkillFiles: (pluginName: string, skillName: string) =>
+    request<SkillFileSummary[]>(
+      `/api/plugins/${pluginName}/skills/${skillName}/files`,
+    ),
+  getSkillFile: (pluginName: string, skillName: string, path: string) =>
+    request<SkillFile>(
+      `/api/plugins/${pluginName}/skills/${skillName}/files/${path}`,
+    ),
+  putSkillFile: (
+    pluginName: string,
+    skillName: string,
+    path: string,
+    data: { content: string; isBinary: boolean },
+  ) =>
+    request<SkillFile>(
+      `/api/plugins/${pluginName}/skills/${skillName}/files/${path}`,
+      { method: 'PUT', body: JSON.stringify(data) },
+    ),
+  deleteSkillFile: (pluginName: string, skillName: string, path: string) =>
+    request<void>(
+      `/api/plugins/${pluginName}/skills/${skillName}/files/${path}`,
+      { method: 'DELETE' },
+    ),
 }
 
 export type FindingSeverity = 'problem' | 'warning' | 'info'

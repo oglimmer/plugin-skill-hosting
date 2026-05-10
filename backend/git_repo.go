@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -141,6 +142,15 @@ func (a *App) materializePlugin(ctx context.Context, p *Plugin) error {
 			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
 				return err
 			}
+			files, err := a.loadSkillFiles(ctx, s.ID)
+			if err != nil {
+				return err
+			}
+			for _, f := range files {
+				if err := writeSkillFileToWorkTree(dir, f); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
@@ -182,6 +192,29 @@ func wipeWorkTree(work string) error {
 		}
 	}
 	return nil
+}
+
+// writeSkillFileToWorkTree decodes a SkillFile (text or base64-binary) and
+// writes it under skillDir at its relative path, creating intermediate dirs
+// as needed. Path safety has already been enforced at upload time, but we
+// re-anchor under skillDir here as a defence in depth.
+func writeSkillFileToWorkTree(skillDir string, f SkillFile) error {
+	rel := filepath.FromSlash(f.Path)
+	full := filepath.Join(skillDir, rel)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	var data []byte
+	if f.IsBinary {
+		decoded, err := base64.StdEncoding.DecodeString(f.Content)
+		if err != nil {
+			return fmt.Errorf("decode %s: %w", f.Path, err)
+		}
+		data = decoded
+	} else {
+		data = []byte(f.Content)
+	}
+	return os.WriteFile(full, data, 0o644)
 }
 
 func buildSkillMarkdown(s Skill) string {

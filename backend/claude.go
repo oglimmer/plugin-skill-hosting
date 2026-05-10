@@ -94,7 +94,7 @@ func (a *App) callClaude(ctx context.Context, system, user string) (string, erro
 	return sb.String(), nil
 }
 
-const skillValidationSystemPrompt = `You are an expert reviewer of Claude Code agent skills. A skill is a Markdown file with YAML frontmatter (name, description) plus a body that tells Claude how to perform a task.
+const skillValidationSystemPrompt = `You are an expert reviewer of Claude Code agent skills. A skill is a directory containing SKILL.md (Markdown with YAML frontmatter: name, description, plus a body that tells Claude how to perform a task) and optionally supporting files under scripts/, references/, or assets/.
 
 You will receive a draft. Your entire response must be a single JSON object and nothing else — no leading text, no trailing text, no Markdown, no code fences. The very first character of your output must be "{" and the very last character must be "}". Match exactly this schema:
 
@@ -121,6 +121,7 @@ Evaluation focus:
 3. The body should be structured, action-oriented Markdown with step-by-step guidance.
 4. Body must not contradict the description.
 5. Watch for ambiguity, overlap with general capabilities, or scope so broad it would always trigger (or so narrow it never would).
+6. If a file listing is provided, cross-check it against the body: flag references to files that are not listed (problem) and flag listed files the body never mentions (warning).
 
 Be direct. No filler, no praise. If everything is fine, return an empty findings array.`
 
@@ -139,9 +140,10 @@ type ValidationReport struct {
 }
 
 type validateSkillRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Body        string `json:"body"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Body        string             `json:"body"`
+	Files       []SkillFileSummary `json:"files,omitempty"`
 }
 
 func (a *App) handleValidateSkill(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +163,18 @@ func (a *App) handleValidateSkill(w http.ResponseWriter, r *http.Request) {
 		strings.TrimSpace(req.Description),
 		req.Body,
 	)
+	if len(req.Files) > 0 {
+		var sb strings.Builder
+		sb.WriteString("\n\n--- Supporting files (paths only, not contents) ---\n")
+		for _, f := range req.Files {
+			kind := "text"
+			if f.IsBinary {
+				kind = "binary"
+			}
+			fmt.Fprintf(&sb, "- %s (%s, %d bytes)\n", f.Path, kind, f.SizeBytes)
+		}
+		userMsg += sb.String()
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
