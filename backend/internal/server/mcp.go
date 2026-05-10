@@ -32,9 +32,14 @@ func (a *App) mcpHandler() http.Handler {
 		nil,
 	)
 	a.registerMCPTools(server)
+	// Stateless: no session map kept across requests. All tools here are
+	// stateless reads/writes against Postgres, so there is nothing worth
+	// preserving per session — and stateful mode would otherwise return 404
+	// "session not found" to every client whose session ID predates the last
+	// backend restart, forcing them to manually reconnect after each deploy.
 	return mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server { return server },
-		nil,
+		&mcp.StreamableHTTPOptions{Stateless: true},
 	)
 }
 
