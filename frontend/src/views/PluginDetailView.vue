@@ -190,35 +190,39 @@ onMounted(() => {
     </div>
 
     <div v-if="deletedSkills.length > 0" class="card">
-      <h2>Deleted skills</h2>
-      <p class="muted" style="margin-top: 0">
-        Soft-deleted; restore to bring them back into the plugin.
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Description</th>
-            <th>Deleted</th>
-            <th v-if="isAuthed"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="s in deletedSkills" :key="s.id">
-            <td>{{ s.name }}</td>
-            <td>{{ s.description }}</td>
-            <td class="muted" style="white-space: nowrap">
-              <span v-if="s.deletedByName">{{ s.deletedByName }}</span>
-              <span v-else>—</span>
-              <br />
-              <small>{{ fmt(s.deletedAt) }}</small>
-            </td>
-            <td v-if="isAuthed" style="text-align: right">
-              <button class="secondary" @click="restoreSkill(s.name)">Restore</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <details>
+        <summary class="muted" style="cursor: pointer">
+          Deleted skills ({{ deletedSkills.length }})
+        </summary>
+        <p class="muted" style="margin: 12px 0">
+          Soft-deleted; restore to bring them back into the plugin.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Description</th>
+              <th>Deleted</th>
+              <th v-if="isAuthed"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="s in deletedSkills" :key="s.id">
+              <td>{{ s.name }}</td>
+              <td>{{ s.description }}</td>
+              <td class="muted" style="white-space: nowrap">
+                <span v-if="s.deletedByName">{{ s.deletedByName }}</span>
+                <span v-else>—</span>
+                <br />
+                <small>{{ fmt(s.deletedAt) }}</small>
+              </td>
+              <td v-if="isAuthed" style="text-align: right">
+                <button class="secondary" @click="restoreSkill(s.name)">Restore</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </details>
     </div>
 
     <div class="card">
