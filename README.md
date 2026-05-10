@@ -139,50 +139,12 @@ Without the token, every `marketplace.json` and `/git/...` request gets a `401 U
 
 ## Deploy to Kubernetes with Helm
 
-A chart lives at `helm/plugin-skill-hosting/`. It ships:
+A chart lives at [`helm/plugin-skill-hosting/`](helm/plugin-skill-hosting/README.md) — see its README for prerequisites, the full values reference, sealing the application secret, and ingress / PVC gotchas.
 
-- Backend `Deployment` + `Service` (the Go API and git smart-HTTP)
-- Frontend `Deployment` + `Service` (nginx serving the SPA)
-- A bundled Postgres 16 `Deployment` + `Service` + PVC (toggle off via `postgres.enabled=false` to use an external DB)
-- Two PVCs: one for `/data` (bare git repos + worktrees), one for Postgres
-- An `Ingress` (nginx + cert-manager) routing `/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz` → backend, and `/` → frontend
-- A `SealedSecret` template for `JWT_SECRET` and `POSTGRES_PASSWORD` (or `DATABASE_URL` when `postgres.enabled=false`)
+Two product-level points worth knowing before you read the chart docs:
 
-### Prerequisites
-
-- A cluster with `ingress-nginx`, `cert-manager`, and `sealed-secrets` installed
-- A cluster issuer (default in `values.yaml` is `oglimmer-com-dns`)
-- An image pull secret if pulling from a private registry (default: `oglimmerregistrykey`)
-
-### Configure
-
-Edit `helm/plugin-skill-hosting/values.yaml` — at minimum:
-
-- `publicBaseURL` — must be **HTTPS** (Claude Code rejects `http://` plugin sources). Embedded in `marketplace.json`.
-- `ingress.hosts[0].host` and `ingress.tls[0].hosts` — your DNS name
-- `backend.image.repository` / `frontend.image.repository` — your container registry
-- `cert-manager.io/cluster-issuer` annotation — your issuer name
-
-### Seal the secret
-
-The chart expects a sealed secret named `plugin-skill-hosting-secret`. Generate it before installing:
-
-```bash
-kubectl create secret generic plugin-skill-hosting-secret \
-  --dry-run=client -o yaml \
-  --from-literal=POSTGRES_PASSWORD=<db-password> \
-  --from-literal=JWT_SECRET=<32+chars> \
-  | kubeseal --format yaml > helm/plugin-skill-hosting/templates/sealed-secret.yaml
-```
-
-If `postgres.enabled=false`, replace `POSTGRES_PASSWORD` with `DATABASE_URL=postgres://user:pass@host:5432/db?sslmode=require`.
-
-### Install / upgrade
-
-```bash
-helm upgrade --install plugin-skill-hosting helm/plugin-skill-hosting \
-  --namespace plugin-skill-hosting --create-namespace
-```
+- `publicBaseURL` must be **HTTPS** — Claude Code rejects `http://` plugin sources, and the URL is embedded in `marketplace.json`.
+- The chart deploys backend + frontend + Postgres + ingress + a sealed secret. Postgres can be turned off (`postgres.enabled=false`) to use an external DB; in that case `DATABASE_URL` goes into the sealed secret.
 
 ### Build and push images
 
@@ -196,13 +158,6 @@ helm upgrade --install plugin-skill-hosting helm/plugin-skill-hosting \
 ```
 
 Override the registry with `--registries my-registry.com` or `DEFAULT_REGISTRIES_ENV=...`.
-
-### Notes
-
-- The backend container runs as UID 10001; `podSecurityContext.fsGroup: 10001` makes the `/data` PVC group-writable. If you change the image's user, update both.
-- Ingress path order matters — backend prefixes (`/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz`) must precede the `/` catch-all that goes to the frontend. The bundled values get this right; preserve order if you edit them.
-- The git smart-HTTP endpoint needs `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"` and a generous `proxy-body-size`. The MCP endpoint additionally needs `proxy-buffering: "off"` and long `proxy-read-timeout` / `proxy-send-timeout` so its SSE stream isn't reaped after the default 60 s. All four are already set in `values.yaml`.
-- Both PVCs (`-data` for git, Postgres data) survive `helm uninstall`. Snapshot them before destroying the release.
 
 ## Run for development (no Docker)
 
@@ -314,13 +269,11 @@ description: One-line summary Claude uses to decide when to apply this skill
 
 ## What this is *not*
 
-This is an MVP / proof-of-concept:
-
-- No email verification, password reset, or rate limiting
-- Single global marketplace gated by per-user tokens — every authenticated user sees and can edit every plugin (the token only controls *access*, not visibility or write authorisation; only **delete** is owner-restricted)
+- A SaaS product with clear tenant separation
+- This is a sharing platform for one organziation
+- User/Password has no email verification, password reset as it's only for dev testing
 - No SKILL.md frontmatter beyond `name` and `description` (no `allowed-tools`, `arguments`, etc.)
 - A plugin may contain skills only — no commands, agents, hooks, or bundled MCP servers as plugin contents. (This service *exposes* its own MCP server at `/mcp` so clients can edit skills, but the plugins it hosts can still only ship skills.)
-- Force-push on every change (acceptable for a marketplace, not for a real git repo)
 
 Each of these is straightforward to add later — the data model and API leave room.
 
