@@ -412,6 +412,7 @@ func (a *App) handleCreatePlugin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	pluginMutationsTotal.WithLabelValues("create", "success").Inc()
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -436,6 +437,7 @@ func (a *App) handleDeletePlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.removeRepo(p.Name)
+	pluginMutationsTotal.WithLabelValues("delete", "success").Inc()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -479,6 +481,7 @@ func (a *App) handleRestorePlugin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
+	pluginMutationsTotal.WithLabelValues("restore", "success").Inc()
 	writeJSON(w, http.StatusOK, restored)
 }
 
@@ -559,6 +562,7 @@ func (a *App) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	skillMutationsTotal.WithLabelValues("create", "success").Inc()
 	if s, err := a.loadSkillByID(r.Context(), id); err == nil {
 		writeJSON(w, http.StatusOK, s)
 		return
@@ -604,6 +608,7 @@ func (a *App) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
+	skillMutationsTotal.WithLabelValues("update", "success").Inc()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -637,6 +642,7 @@ func (a *App) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
+	skillMutationsTotal.WithLabelValues("delete", "success").Inc()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -707,6 +713,7 @@ func (a *App) handleRestoreSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	skillMutationsTotal.WithLabelValues("restore", "success").Inc()
 	if s, err := a.loadSkillByID(r.Context(), skillID); err == nil {
 		writeJSON(w, http.StatusOK, s)
 		return
@@ -857,6 +864,7 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	skillMutationsTotal.WithLabelValues("revert", "success").Inc()
 	if s, err := a.loadSkillByID(r.Context(), skillID); err == nil {
 		writeJSON(w, http.StatusOK, s)
 		return

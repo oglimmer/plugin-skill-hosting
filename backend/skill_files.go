@@ -350,6 +350,7 @@ func (a *App) handleUpsertSkillFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
+	skillFileMutationsTotal.WithLabelValues("upsert", "success").Inc()
 	writeJSON(w, http.StatusOK, f)
 }
 
@@ -392,6 +393,7 @@ func (a *App) handleDeleteSkillFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
+	skillFileMutationsTotal.WithLabelValues("delete", "success").Inc()
 	w.WriteHeader(http.StatusNoContent)
 }
 

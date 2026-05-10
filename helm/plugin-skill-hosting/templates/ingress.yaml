@@ -28,6 +28,21 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
+          {{- /*
+              Publish /metrics on the public ingress only when explicitly
+              opted in. Pair this with a METRICS_TOKEN in the sealed secret;
+              without one the endpoint would be world-readable. pathType
+              Exact wins over the SPA catch-all "/" so ordering is moot.
+          */}}
+          {{- if and $.Values.backend.metrics.enabled $.Values.backend.metrics.exposeOnIngress }}
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "psh.backend.fullname" $ }}
+                port:
+                  number: {{ $.Values.backend.service.port }}
+          {{- end }}
           {{- range .paths }}
           - path: {{ .path }}
             pathType: {{ .pathType }}

@@ -179,17 +179,22 @@ func (a *App) handleValidateSkill(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 
+	start := time.Now()
 	raw, err := a.callClaude(ctx, skillValidationSystemPrompt, userMsg)
+	claudeValidationDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
+		claudeValidationTotal.WithLabelValues("error").Inc()
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
 	report, err := parseValidationReport(raw)
 	if err != nil {
+		claudeValidationTotal.WithLabelValues("error").Inc()
 		writeErr(w, http.StatusBadGateway, "could not parse Claude response: "+err.Error())
 		return
 	}
+	claudeValidationTotal.WithLabelValues("success").Inc()
 	writeJSON(w, http.StatusOK, report)
 }
 

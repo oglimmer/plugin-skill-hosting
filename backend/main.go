@@ -41,6 +41,10 @@ type Config struct {
 
 	AnthropicAPIKey string
 	AnthropicModel  string
+
+	// MetricsToken, when non-empty, gates /metrics with Bearer auth. Default
+	// is open — relies on the public ingress not routing /metrics.
+	MetricsToken string
 }
 
 func loadConfig() Config {
@@ -66,6 +70,8 @@ func loadConfig() Config {
 
 		AnthropicAPIKey: getenv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:  getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+
+		MetricsToken: getenv("METRICS_TOKEN", ""),
 	}
 	if c.AuthMode != "password" && c.AuthMode != "oidc" {
 		log.Fatalf("AUTH_MODE must be 'password' or 'oidc', got %q", c.AuthMode)
@@ -121,6 +127,8 @@ func main() {
 		log.Fatalf("migrate: %v", err)
 	}
 
+	registerDBStatsCollector(db)
+
 	app := &App{cfg: cfg, db: db}
 
 	if cfg.AuthMode == "oidc" {
@@ -134,6 +142,7 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(httpMetricsMiddleware)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -146,6 +155,8 @@ func main() {
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
+
+	r.Method("GET", "/metrics", metricsHandler(cfg.MetricsToken))
 
 	r.Group(func(r chi.Router) {
 		r.Use(app.tokenGateMiddleware)

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sosedoff/gitkit"
 )
@@ -93,6 +94,14 @@ func (a *App) removeRepo(name string) {
 }
 
 func (a *App) materializePlugin(ctx context.Context, p *Plugin) error {
+	start := time.Now()
+	err := a.materializePluginInner(ctx, p)
+	gitMaterializeDuration.Observe(time.Since(start).Seconds())
+	gitMaterializeTotal.WithLabelValues(resultLabel(err)).Inc()
+	return err
+}
+
+func (a *App) materializePluginInner(ctx context.Context, p *Plugin) error {
 	if err := a.ensureBareRepo(p.Name); err != nil {
 		return err
 	}

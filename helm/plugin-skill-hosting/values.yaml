@@ -50,6 +50,17 @@ backend:
     type: ClusterIP
     port: 8080
 
+  # Prometheus metrics on /metrics.
+  #   enabled          = adds prometheus.io/scrape pod annotations (cluster scrape).
+  #   exposeOnIngress  = adds /metrics to the public ingress. Only safe when a
+  #                      METRICS_TOKEN is present in the sealed secret — the
+  #                      backend then requires `Authorization: Bearer <token>`.
+  # The token value itself lives in the sealed secret under METRICS_TOKEN
+  # (optional — if absent, /metrics is open inside the cluster).
+  metrics:
+    enabled: true
+    exposeOnIngress: false
+
   # PVC holding the bare git repos and worktrees (DATA_DIR=/data)
   persistence:
     enabled: true

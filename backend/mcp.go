@@ -149,6 +149,22 @@ func okResult[T any](text string, out T) (*mcp.CallToolResult, T, error) {
 	return &mcp.CallToolResult{Content: toolText(text)}, out, nil
 }
 
+// instrumentMCP wraps a tool handler so each call records a count + duration
+// labelled by tool name. Result label is success when the handler returns
+// nil error, otherwise error.
+func instrumentMCP[In any, Out any](
+	name string,
+	h func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error),
+) func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		start := time.Now()
+		res, out, err := h(ctx, req, in)
+		mcpToolCallDuration.WithLabelValues(name).Observe(time.Since(start).Seconds())
+		mcpToolCallsTotal.WithLabelValues(name, resultLabel(err)).Inc()
+		return res, out, err
+	}
+}
+
 // resolvePlugin loads an active plugin by name, normalising "not found" to a
 // stable error string the LLM can act on.
 func (a *App) resolvePlugin(ctx context.Context, name string) (*Plugin, error) {
@@ -199,7 +215,7 @@ func (a *App) addToolListPlugins(s *mcp.Server) {
 		Name:        "list_plugins",
 		Title:       "List plugins",
 		Description: "List all active plugins in the marketplace.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ mcpEmptyIn) (*mcp.CallToolResult, mcpListPluginsOut, error) {
+	}, instrumentMCP("list_plugins", func(ctx context.Context, _ *mcp.CallToolRequest, _ mcpEmptyIn) (*mcp.CallToolResult, mcpListPluginsOut, error) {
 		var zero mcpListPluginsOut
 		if userFromCtx(ctx) == nil {
 			return nil, zero, errors.New("unauthenticated")
@@ -220,7 +236,7 @@ func (a *App) addToolListPlugins(s *mcp.Server) {
 			})
 		}
 		return okResult(fmt.Sprintf("%d plugin(s)", len(out.Plugins)), out)
-	})
+	}))
 }
 
 func (a *App) addToolGetPlugin(s *mcp.Server) {
@@ -228,7 +244,7 @@ func (a *App) addToolGetPlugin(s *mcp.Server) {
 		Name:        "get_plugin",
 		Title:       "Get plugin",
 		Description: "Read a plugin's metadata and the list of its skills (names + descriptions, no bodies).",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpPluginRefIn) (*mcp.CallToolResult, mcpPluginDetail, error) {
+	}, instrumentMCP("get_plugin", func(ctx context.Context, _ *mcp.CallToolRequest, in mcpPluginRefIn) (*mcp.CallToolResult, mcpPluginDetail, error) {
 		var zero mcpPluginDetail
 		if userFromCtx(ctx) == nil {
 			return nil, zero, errors.New("unauthenticated")
@@ -258,7 +274,7 @@ func (a *App) addToolGetPlugin(s *mcp.Server) {
 			})
 		}
 		return okResult(fmt.Sprintf("plugin %q v%s, %d skill(s)", p.Name, p.Version, len(skills)), out)
-	})
+	}))
 }
 
 func (a *App) addToolGetSkill(s *mcp.Server) {
@@ -266,7 +282,7 @@ func (a *App) addToolGetSkill(s *mcp.Server) {
 		Name:        "get_skill",
 		Title:       "Get skill",
 		Description: "Read a skill's description, SKILL.md body, and the list of its supporting files.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSkillRefIn) (*mcp.CallToolResult, mcpSkillDetail, error) {
+	}, instrumentMCP("get_skill", func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSkillRefIn) (*mcp.CallToolResult, mcpSkillDetail, error) {
 		var zero mcpSkillDetail
 		if userFromCtx(ctx) == nil {
 			return nil, zero, errors.New("unauthenticated")
@@ -294,7 +310,7 @@ func (a *App) addToolGetSkill(s *mcp.Server) {
 			out.Files = append(out.Files, mcpSkillFileBrief{Path: f.Path, IsBinary: f.IsBinary, SizeBytes: f.SizeBytes})
 		}
 		return okResult(fmt.Sprintf("skill %q in %q (%d file(s))", sk.Name, p.Name, len(files)), out)
-	})
+	}))
 }
 
 func (a *App) addToolCreateSkill(s *mcp.Server) {
@@ -302,7 +318,7 @@ func (a *App) addToolCreateSkill(s *mcp.Server) {
 		Name:        "create_skill",
 		Title:       "Create skill",
 		Description: "Add a new skill to a plugin. Bumps the plugin version and rewrites the git repo.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpCreateSkillIn) (*mcp.CallToolResult, mcpStatusOut, error) {
+	}, instrumentMCP("create_skill", func(ctx context.Context, _ *mcp.CallToolRequest, in mcpCreateSkillIn) (*mcp.CallToolResult, mcpStatusOut, error) {
 		var zero mcpStatusOut
 		user := userFromCtx(ctx)
 		if user == nil {
@@ -353,11 +369,12 @@ func (a *App) addToolCreateSkill(s *mcp.Server) {
 		if err := a.materializePlugin(ctx, p); err != nil {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
+		skillMutationsTotal.WithLabelValues("create", "success").Inc()
 		return okResult(
 			fmt.Sprintf("created skill %q in %q (plugin now v%s)", name, p.Name, p.Version),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "skill created"},
 		)
-	})
+	}))
 }
 
 func (a *App) addToolUpdateSkill(s *mcp.Server) {
@@ -365,7 +382,7 @@ func (a *App) addToolUpdateSkill(s *mcp.Server) {
 		Name:        "update_skill",
 		Title:       "Update skill",
 		Description: "Replace a skill's description and SKILL.md body. Bumps the plugin version and rewrites the git repo.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpUpdateSkillIn) (*mcp.CallToolResult, mcpStatusOut, error) {
+	}, instrumentMCP("update_skill", func(ctx context.Context, _ *mcp.CallToolRequest, in mcpUpdateSkillIn) (*mcp.CallToolResult, mcpStatusOut, error) {
 		var zero mcpStatusOut
 		user := userFromCtx(ctx)
 		if user == nil {
@@ -394,11 +411,12 @@ func (a *App) addToolUpdateSkill(s *mcp.Server) {
 		if err := a.materializePlugin(ctx, p); err != nil {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
+		skillMutationsTotal.WithLabelValues("update", "success").Inc()
 		return okResult(
 			fmt.Sprintf("updated skill %q in %q (plugin now v%s)", existing.Name, p.Name, p.Version),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "skill updated"},
 		)
-	})
+	}))
 }
 
 func (a *App) addToolListSkillFiles(s *mcp.Server) {
@@ -406,7 +424,7 @@ func (a *App) addToolListSkillFiles(s *mcp.Server) {
 		Name:        "list_skill_files",
 		Title:       "List skill files",
 		Description: "List supporting files attached to a skill (paths + sizes, no content).",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSkillRefIn) (*mcp.CallToolResult, mcpListSkillFilesOut, error) {
+	}, instrumentMCP("list_skill_files", func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSkillRefIn) (*mcp.CallToolResult, mcpListSkillFilesOut, error) {
 		var zero mcpListSkillFilesOut
 		if userFromCtx(ctx) == nil {
 			return nil, zero, errors.New("unauthenticated")
@@ -432,7 +450,7 @@ func (a *App) addToolListSkillFiles(s *mcp.Server) {
 			out.Files = append(out.Files, mcpSkillFileBrief{Path: f.Path, IsBinary: f.IsBinary, SizeBytes: f.SizeBytes})
 		}
 		return okResult(fmt.Sprintf("%d file(s) in %s/%s", len(files), p.Name, sk.Name), out)
-	})
+	}))
 }
 
 func (a *App) addToolGetSkillFile(s *mcp.Server) {
@@ -440,7 +458,7 @@ func (a *App) addToolGetSkillFile(s *mcp.Server) {
 		Name:        "get_skill_file",
 		Title:       "Get skill file",
 		Description: "Read one supporting file from a skill. Binary files are returned as base64 (isBinary=true).",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSkillFileRefIn) (*mcp.CallToolResult, mcpSkillFileOut, error) {
+	}, instrumentMCP("get_skill_file", func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSkillFileRefIn) (*mcp.CallToolResult, mcpSkillFileOut, error) {
 		var zero mcpSkillFileOut
 		if userFromCtx(ctx) == nil {
 			return nil, zero, errors.New("unauthenticated")
@@ -471,7 +489,7 @@ func (a *App) addToolGetSkillFile(s *mcp.Server) {
 			Content:   f.Content,
 		}
 		return okResult(fmt.Sprintf("%s (%d bytes)", f.Path, f.SizeBytes), out)
-	})
+	}))
 }
 
 func (a *App) addToolUpsertSkillFile(s *mcp.Server) {
@@ -479,7 +497,7 @@ func (a *App) addToolUpsertSkillFile(s *mcp.Server) {
 		Name:        "upsert_skill_file",
 		Title:       "Create or update skill file",
 		Description: "Write a supporting file (under scripts/, references/, or assets/). Bumps the plugin patch version and rewrites the git repo.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpUpsertSkillFileIn) (*mcp.CallToolResult, mcpStatusOut, error) {
+	}, instrumentMCP("upsert_skill_file", func(ctx context.Context, _ *mcp.CallToolRequest, in mcpUpsertSkillFileIn) (*mcp.CallToolResult, mcpStatusOut, error) {
 		var zero mcpStatusOut
 		user := userFromCtx(ctx)
 		if user == nil {
@@ -554,9 +572,10 @@ func (a *App) addToolUpsertSkillFile(s *mcp.Server) {
 		if err := a.materializePlugin(ctx, p); err != nil {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
+		skillFileMutationsTotal.WithLabelValues("upsert", "success").Inc()
 		return okResult(
 			fmt.Sprintf("wrote %s to %s/%s (plugin now v%s)", pth, p.Name, sk.Name, p.Version),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "file written"},
 		)
-	})
+	}))
 }

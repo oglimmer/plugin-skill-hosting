@@ -14,6 +14,11 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.backend.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8080"
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -104,6 +109,14 @@ spec:
         {{- with .Values.anthropic.model }}
         - name: ANTHROPIC_MODEL
           value: {{ . | quote }}
+        {{- end }}
+        {{- if .Values.backend.metrics.enabled }}
+        - name: METRICS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "psh.secretName" . }}
+              key: METRICS_TOKEN
+              optional: true
         {{- end }}
         volumeMounts:
         - name: data

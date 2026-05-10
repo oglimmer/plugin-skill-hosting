@@ -268,13 +268,16 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, username, password_hash, api_token FROM users WHERE email = $1`, req.Email).
 		Scan(&id, &username, &hash, &apiTok)
 	if err != nil {
+		loginsTotal.WithLabelValues("password", "failure").Inc()
 		writeErr(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)); err != nil {
+		loginsTotal.WithLabelValues("password", "failure").Inc()
 		writeErr(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	loginsTotal.WithLabelValues("password", "success").Inc()
 
 	tok, err := a.issueToken(id)
 	if err != nil {

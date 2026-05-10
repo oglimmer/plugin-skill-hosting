@@ -180,6 +180,7 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// redirect path used for other failures) and audit-log the rejection.
 	// The error message is generic to avoid leaking the configured domains.
 	if err := validateGoogleWorkspaceHD(idToken.Issuer, claims.HD, a.cfg.AllowedGoogleWorkspaceDomains); err != nil {
+		loginsTotal.WithLabelValues("oidc", "failure").Inc()
 		log.Printf("WARN: oidc workspace domain rejected: hd=%q email=%q sub=%q issuer=%q",
 			claims.HD, claims.Email, claims.Sub, idToken.Issuer)
 		writeErr(w, http.StatusUnauthorized, "workspace domain not allowed")
@@ -198,6 +199,7 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	loginsTotal.WithLabelValues("oidc", "success").Inc()
 	userJSON, _ := json.Marshal(user)
 	frag := url.Values{}
 	frag.Set("token", jwt)
@@ -207,6 +209,7 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) oidcFail(w http.ResponseWriter, r *http.Request, msg string) {
+	loginsTotal.WithLabelValues("oidc", "failure").Inc()
 	dest := strings.TrimRight(a.cfg.PublicBaseURL, "/") + "/auth/callback#error=" + url.QueryEscape(msg)
 	http.Redirect(w, r, dest, http.StatusFound)
 }
