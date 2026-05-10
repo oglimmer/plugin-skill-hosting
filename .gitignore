@@ -2,6 +2,7 @@
 backend/server
 backend/marketplace
 backend/data/
+backend/.idea/
 node_modules/
 frontend/dist/
 .DS_Store
