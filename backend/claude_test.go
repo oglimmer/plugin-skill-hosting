@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestParseValidationReport_Plain(t *testing.T) {
 	in := `{"summary":"ok","findings":[{"severity":"problem","title":"T","detail":"D"}]}`
@@ -56,5 +60,42 @@ func TestParseValidationReport_GarbageBeforeAndAfter(t *testing.T) {
 	}
 	if rep.Summary != "s" {
 		t.Errorf("summary = %q", rep.Summary)
+	}
+}
+
+func TestParseValidationReport_MalformedJSON(t *testing.T) {
+	// Looks like JSON (has braces) but isn't a valid object.
+	if _, err := parseValidationReport("{not valid"); err == nil {
+		t.Error("expected unmarshal error for malformed JSON")
+	}
+}
+
+func TestParseValidationReport_EmptyFindingsAndSuggestion(t *testing.T) {
+	in := `{"summary":"all good","findings":[],"suggestedDescription":"better one"}`
+	rep, err := parseValidationReport(in)
+	if err != nil {
+		t.Fatalf("parseValidationReport: %v", err)
+	}
+	if len(rep.Findings) != 0 {
+		t.Errorf("findings should be empty, got %d", len(rep.Findings))
+	}
+	if rep.SuggestedDescription != "better one" {
+		t.Errorf("suggestedDescription = %q", rep.SuggestedDescription)
+	}
+}
+
+func TestCallClaude_NoAPIKeyConfigured(t *testing.T) {
+	a := &App{cfg: Config{AnthropicAPIKey: ""}}
+	if _, err := a.callClaude(context.Background(), "sys", "user"); err == nil {
+		t.Error("expected error when API key is unset")
+	} else if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Errorf("error should mention env var; got %v", err)
+	}
+}
+
+func TestCallClaude_WhitespaceKeyTreatedAsUnset(t *testing.T) {
+	a := &App{cfg: Config{AnthropicAPIKey: "   "}}
+	if _, err := a.callClaude(context.Background(), "sys", "user"); err == nil {
+		t.Error("expected error when API key is only whitespace")
 	}
 }

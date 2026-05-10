@@ -2,7 +2,12 @@ package main
 
 import (
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestValidateSkillFilePath(t *testing.T) {
@@ -84,5 +89,63 @@ func TestDecodeFileContent_BadBase64(t *testing.T) {
 	req := &skillFileUpsertReq{Content: "not base64!!!", IsBinary: &tru}
 	if _, _, err := decodeFileContent(req); err == nil {
 		t.Error("expected base64 decode error")
+	}
+}
+
+func TestDecodeFileContent_NilIsBinaryDefaultsToText(t *testing.T) {
+	req := &skillFileUpsertReq{Content: "plain text", IsBinary: nil}
+	data, isBin, err := decodeFileContent(req)
+	if err != nil {
+		t.Fatalf("decodeFileContent: %v", err)
+	}
+	if isBin {
+		t.Error("nil IsBinary should default to text")
+	}
+	if string(data) != "plain text" {
+		t.Errorf("data = %q", string(data))
+	}
+}
+
+func TestDecodeFileContent_FalseIsBinaryRejectsInvalidUTF8(t *testing.T) {
+	fls := false
+	req := &skillFileUpsertReq{Content: "\xff\xfe", IsBinary: &fls}
+	if _, _, err := decodeFileContent(req); err == nil {
+		t.Error("expected invalid-UTF8 error when IsBinary=false")
+	}
+}
+
+func TestValidateSkillFilePath_LengthCap(t *testing.T) {
+	long := "scripts/" + strings.Repeat("a", 250)
+	if _, err := validateSkillFilePath(long); err == nil {
+		t.Error("expected too-long error")
+	}
+}
+
+func TestValidateSkillFilePath_AllRoots(t *testing.T) {
+	for _, root := range []string{"scripts", "references", "assets"} {
+		if _, err := validateSkillFilePath(root + "/x.md"); err != nil {
+			t.Errorf("root %s/x.md should be accepted: %v", root, err)
+		}
+	}
+}
+
+func TestValidateSkillFilePath_DotFile(t *testing.T) {
+	// "." segments are explicitly rejected; a leading dot in a filename like
+	// ".env" is a single segment so should be allowed by the segment regex.
+	if _, err := validateSkillFilePath("scripts/.env"); err != nil {
+		t.Errorf("dotfile under whitelisted root should be allowed: %v", err)
+	}
+}
+
+func TestFilePathParam_StripsLeadingSlash(t *testing.T) {
+	r := chi.NewRouter()
+	var captured string
+	r.Get("/files/*", func(_ http.ResponseWriter, req *http.Request) {
+		captured = filePathParam(req)
+	})
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/files/scripts/run.sh", nil))
+	if captured != "scripts/run.sh" {
+		t.Errorf("captured = %q, want scripts/run.sh", captured)
 	}
 }

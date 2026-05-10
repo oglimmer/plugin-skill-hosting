@@ -56,11 +56,31 @@ func TestBumpVersion(t *testing.T) {
 		{"1.2.3", bumpPatch, "1.2.4"},
 		{"0.0.0", bumpPatch, "0.0.1"},
 		{"garbage", bumpMinor, "0.1.0"}, // parseSemver returns zeros
+		{"9.9.9", bumpMajor, "10.0.0"},
+		{"0.99.99", bumpMinor, "0.100.0"},
 	}
 	for _, c := range cases {
 		got := bumpVersion(c.current, c.kind)
 		if got != c.want {
 			t.Errorf("bumpVersion(%q, %v) = %q, want %q", c.current, c.kind, got, c.want)
 		}
+	}
+}
+
+func TestBumpVersion_UnknownKindReturnsCurrent(t *testing.T) {
+	got := bumpVersion("1.2.3", bumpKind(99))
+	if got != "1.2.3" {
+		t.Errorf("unknown bumpKind should return current; got %q", got)
+	}
+}
+
+func TestBumpKindForSizeChange_SymmetricThreshold(t *testing.T) {
+	// Shrink by exactly 30% — equal to threshold, so still patch.
+	if got := bumpKindForSizeChange(100, 70); got != bumpPatch {
+		t.Errorf("100→70 should be patch (= 30%% threshold), got %v", got)
+	}
+	// Shrink by 31% — minor.
+	if got := bumpKindForSizeChange(100, 69); got != bumpMinor {
+		t.Errorf("100→69 should be minor (>30%%), got %v", got)
 	}
 }
