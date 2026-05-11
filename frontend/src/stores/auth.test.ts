@@ -14,7 +14,13 @@ vi.mock('../api', () => ({
 import { api } from '../api'
 import { useAuthStore } from './auth'
 
-const fakeUser = { id: 'u1', email: 'a@b.c', username: 'alice', apiToken: 'tok' }
+const fakeUser = {
+  id: 'u1',
+  email: 'a@b.c',
+  username: 'alice',
+  apiToken: 'tok',
+  status: 'approved' as const,
+}
 
 describe('auth store', () => {
   beforeEach(() => {
@@ -57,11 +63,67 @@ describe('auth store', () => {
     expect(localStorage.getItem('user')).toBeNull()
   })
 
+  it('doLogout stays local for password mode', async () => {
+    vi.mocked(api.authConfig).mockResolvedValue({
+      mode: 'password',
+      marketplaceName: 'mp',
+      defaultLicense: 'MIT',
+      userApprovalRequired: false,
+    })
+    const s = useAuthStore()
+    await s.ensureMode()
+    localStorage.setItem('token', 't')
+    localStorage.setItem('user', JSON.stringify(fakeUser))
+    expect(s.doLogout()).toBe(false)
+    expect(s.token).toBeNull()
+    expect(localStorage.getItem('user')).toBeNull()
+  })
+
+  it('doLogout stays local for corporate OIDC (domain-restricted)', async () => {
+    vi.mocked(api.authConfig).mockResolvedValue({
+      mode: 'oidc',
+      marketplaceName: 'mp',
+      defaultLicense: 'MIT',
+      userApprovalRequired: false,
+    })
+    const s = useAuthStore()
+    await s.ensureMode()
+    expect(s.doLogout()).toBe(false)
+  })
+
+  it('doLogout kicks off RP-initiated logout for open OIDC', async () => {
+    vi.mocked(api.authConfig).mockResolvedValue({
+      mode: 'oidc',
+      marketplaceName: 'mp',
+      defaultLicense: 'MIT',
+      userApprovalRequired: true,
+    })
+    // jsdom's window.location is read-only by default; assign via Object.defineProperty.
+    const setHref = vi.fn()
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: {
+        get href() { return '' },
+        set href(v: string) { setHref(v) },
+      },
+    })
+
+    const s = useAuthStore()
+    await s.ensureMode()
+    localStorage.setItem('user', JSON.stringify(fakeUser))
+    expect(s.doLogout()).toBe(true)
+    expect(setHref).toHaveBeenCalledWith('/api/auth/oidc/logout')
+    // Local state still cleared, so the in-flight redirect lands on a clean SPA.
+    expect(s.token).toBeNull()
+    expect(localStorage.getItem('user')).toBeNull()
+  })
+
   it('ensureMode caches the auth config response', async () => {
     vi.mocked(api.authConfig).mockResolvedValue({
       mode: 'password',
       marketplaceName: 'mp',
       defaultLicense: 'MIT',
+      userApprovalRequired: false,
     })
     const s = useAuthStore()
     const m1 = await s.ensureMode()

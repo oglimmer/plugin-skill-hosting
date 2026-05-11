@@ -39,6 +39,11 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/pending',
+      component: () => import('./views/PendingView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/plugins/new',
       component: () => import('./views/NewPluginView.vue'),
       meta: { requiresAuth: true },
@@ -72,6 +77,15 @@ router.beforeEach((to) => {
     const auth = useAuthStore()
     if (!auth.token) {
       return { path: '/login', query: { redirect: to.fullPath } }
+    }
+    // Pending / rejected users are confined to /pending until an existing
+    // user approves them (or until they log out from there).
+    const status = auth.user?.status
+    if (status && status !== 'approved' && to.path !== '/pending') {
+      return { path: '/pending' }
+    }
+    if (status === 'approved' && to.path === '/pending') {
+      return { path: '/' }
     }
   }
 })

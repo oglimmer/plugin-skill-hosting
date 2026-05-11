@@ -1,15 +1,22 @@
+export type UserStatus = 'approved' | 'pending' | 'rejected'
+
 export interface User {
   id: string
   email: string
   username: string
   apiToken?: string
+  status: UserStatus
 }
 
 export interface UserSummary {
   id: string
   username: string
   email: string
+  status: UserStatus
   createdAt: string
+  approvedBy?: string
+  approvedByName?: string
+  approvedAt?: string
 }
 
 export interface Plugin {
@@ -78,6 +85,7 @@ export interface AuthConfig {
   mode: AuthMode
   marketplaceName: string
   defaultLicense: string
+  userApprovalRequired: boolean
 }
 
 export interface BackendBuildInfo {

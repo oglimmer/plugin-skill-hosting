@@ -2,6 +2,29 @@ package config
 
 import "testing"
 
+func TestRequiresUserApproval(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{"password mode never requires approval", Config{AuthMode: "password"}, false},
+		{"password mode with domains set still no approval",
+			Config{AuthMode: "password", AllowedGoogleWorkspaceDomains: []string{"acme.com"}}, false},
+		{"oidc + workspace domains = corporate, no approval",
+			Config{AuthMode: "oidc", AllowedGoogleWorkspaceDomains: []string{"acme.com"}}, false},
+		{"oidc + empty domains = open OIDC, approval required",
+			Config{AuthMode: "oidc"}, true},
+		{"oidc + nil-slice domains = approval required",
+			Config{AuthMode: "oidc", AllowedGoogleWorkspaceDomains: nil}, true},
+	}
+	for _, c := range cases {
+		if got := c.cfg.RequiresUserApproval(); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestParseDomainList(t *testing.T) {
 	cases := []struct {
 		in   string

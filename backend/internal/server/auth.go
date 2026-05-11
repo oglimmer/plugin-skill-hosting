@@ -107,6 +107,27 @@ func (a *App) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// requireApprovedMiddleware refuses requests from users whose account is
+// pending approval or has been rejected. Must run AFTER authMiddleware (or
+// any other middleware that puts a *User into the request context).
+//
+// /api/me deliberately bypasses this so the frontend can fetch the user's
+// own status and route them to the "pending" page.
+func (a *App) requireApprovedMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := currentUser(r)
+		if u == nil {
+			writeErr(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		if u.Status != UserStatusApproved {
+			writeErr(w, http.StatusForbidden, "account "+u.Status)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // tokenGateMiddleware authenticates marketplace.json, /git/*, and the read-only
 // plugin endpoints. On failure it sends WWW-Authenticate so `git clone` and
 // curl prompt for credentials.
@@ -116,6 +137,10 @@ func (a *App) tokenGateMiddleware(next http.Handler) http.Handler {
 		if u == nil {
 			w.Header().Set("WWW-Authenticate", `Basic realm="plugin-marketplace"`)
 			writeErr(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		if u.Status != UserStatusApproved {
+			writeErr(w, http.StatusForbidden, "account "+u.Status)
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxUserKey, u)
@@ -138,6 +163,10 @@ func (a *App) mcpTokenGateMiddleware(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, errMsg)
 			return
 		}
+		if u.Status != UserStatusApproved {
+			writeErr(w, http.StatusForbidden, "account "+u.Status)
+			return
+		}
 		ctx := context.WithValue(r.Context(), ctxUserKey, u)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -150,8 +179,8 @@ func generateAPIToken() (string, error) {
 func (a *App) userByAPIToken(ctx context.Context, token string) (*User, error) {
 	u := &User{}
 	err := a.DB.QueryRowContext(ctx,
-		`SELECT id, email, username, api_token, created_at FROM users WHERE api_token = $1`, token).
-		Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.CreatedAt)
+		`SELECT id, email, username, api_token, status, created_at FROM users WHERE api_token = $1`, token).
+		Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.Status, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +190,8 @@ func (a *App) userByAPIToken(ctx context.Context, token string) (*User, error) {
 func (a *App) userByID(ctx context.Context, id string) (*User, error) {
 	u := &User{}
 	err := a.DB.QueryRowContext(ctx,
-		`SELECT id, email, username, api_token, created_at FROM users WHERE id = $1`, id).
-		Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.CreatedAt)
+		`SELECT id, email, username, api_token, status, created_at FROM users WHERE id = $1`, id).
+		Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.Status, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +262,7 @@ func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
 			Email:    req.Email,
 			Username: req.Username,
 			APIToken: apiTok,
+			Status:   UserStatusApproved,
 		},
 	})
 }
@@ -251,11 +281,11 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 
 	var (
-		id, username, hash, apiTok string
+		id, username, hash, apiTok, status string
 	)
 	err := a.DB.QueryRowContext(r.Context(),
-		`SELECT id, username, password_hash, api_token FROM users WHERE email = $1`, req.Email).
-		Scan(&id, &username, &hash, &apiTok)
+		`SELECT id, username, password_hash, api_token, status FROM users WHERE email = $1`, req.Email).
+		Scan(&id, &username, &hash, &apiTok, &status)
 	if err != nil {
 		metrics.LoginsTotal.WithLabelValues("password", "failure").Inc()
 		writeErr(w, http.StatusUnauthorized, "invalid credentials")
@@ -280,6 +310,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 			Email:    req.Email,
 			Username: username,
 			APIToken: apiTok,
+			Status:   status,
 		},
 	})
 }
@@ -304,15 +335,17 @@ func (a *App) handleRegenerateAPIToken(w http.ResponseWriter, r *http.Request) {
 }
 
 type authConfigResp struct {
-	Mode            string `json:"mode"`
-	MarketplaceName string `json:"marketplaceName"`
-	DefaultLicense  string `json:"defaultLicense"`
+	Mode                 string `json:"mode"`
+	MarketplaceName      string `json:"marketplaceName"`
+	DefaultLicense       string `json:"defaultLicense"`
+	UserApprovalRequired bool   `json:"userApprovalRequired"`
 }
 
 func (a *App) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, authConfigResp{
-		Mode:            a.Cfg.AuthMode,
-		MarketplaceName: a.Cfg.MarketplaceName,
-		DefaultLicense:  a.Cfg.DefaultLicense,
+		Mode:                 a.Cfg.AuthMode,
+		MarketplaceName:      a.Cfg.MarketplaceName,
+		DefaultLicense:       a.Cfg.DefaultLicense,
+		UserApprovalRequired: a.Cfg.RequiresUserApproval(),
 	})
 }

@@ -176,6 +176,25 @@ nav.top .links a.user-link .user-link-at {
   color: var(--accent);
   margin-right: 1px;
 }
+nav.top .pending-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-soft);
+}
+nav.top .pending-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(245, 165, 36, 0.55);
+  animation: pending-pulse 2.2s infinite;
+}
+@keyframes pending-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(245, 165, 36, 0.5); }
+  70%  { box-shadow: 0 0 0 10px rgba(245, 165, 36, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 165, 36, 0); }
+}
 
 /* Headings — Fraunces ───────────────────────────────────────── */
 h1 {

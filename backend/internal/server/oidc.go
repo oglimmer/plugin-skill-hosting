@@ -22,14 +22,20 @@ import (
 )
 
 type oidcRuntime struct {
-	provider *oidc.Provider
-	verifier *oidc.IDTokenVerifier
-	oauth2   *oauth2.Config
+	provider           *oidc.Provider
+	verifier           *oidc.IDTokenVerifier
+	oauth2             *oauth2.Config
+	endSessionEndpoint string // empty when the IdP's discovery document doesn't advertise one
 }
 
 const (
-	oidcStateCookie = "oidc_state"
-	oidcNonceCookie = "oidc_nonce"
+	oidcStateCookie   = "oidc_state"
+	oidcNonceCookie   = "oidc_nonce"
+	oidcIDTokenCookie = "oidc_id_token"
+	// Cookie lifetime for the cached id_token. Matches the JWT lifetime
+	// (30 days) so RP-initiated logout still has a hint to send even if
+	// the user lets the tab sit for weeks.
+	oidcIDTokenMaxAge = 30 * 24 * 3600
 )
 
 func (a *App) InitOIDC(ctx context.Context) error {
@@ -45,6 +51,14 @@ func (a *App) InitOIDC(ctx context.Context) error {
 	if len(scopes) == 0 {
 		scopes = []string{oidc.ScopeOpenID, "email", "profile"}
 	}
+	// RP-initiated logout (https://openid.net/specs/openid-connect-rpinitiated-1_0.html)
+	// is advertised in the discovery document. Read it best-effort — IdPs that
+	// don't expose one simply skip upstream logout later.
+	var extra struct {
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	_ = provider.Claims(&extra)
+
 	a.OIDC = &oidcRuntime{
 		provider: provider,
 		verifier: verifier,
@@ -55,6 +69,7 @@ func (a *App) InitOIDC(ctx context.Context) error {
 			RedirectURL:  a.Cfg.OIDCRedirectURL,
 			Scopes:       scopes,
 		},
+		endSessionEndpoint: extra.EndSessionEndpoint,
 	}
 	return nil
 }
@@ -76,6 +91,21 @@ func (a *App) setShortLivedCookie(w http.ResponseWriter, name, value string) {
 		Secure:   strings.HasPrefix(a.Cfg.PublicBaseURL, "https://"),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
+	})
+}
+
+// setOIDCSessionCookie persists data needed for the logout round-trip (the
+// id_token, used as id_token_hint by the IdP). Path mirrors the short-lived
+// cookies so it's only sent to /api/auth/oidc endpoints.
+func (a *App) setOIDCSessionCookie(w http.ResponseWriter, name, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/api/auth/oidc",
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(a.Cfg.PublicBaseURL, "https://"),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   oidcIDTokenMaxAge,
 	})
 }
 
@@ -202,6 +232,11 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Stash the raw id_token so we can present it as id_token_hint when the
+	// user later logs out. The cookie is scoped to /api/auth/oidc so it
+	// never travels with regular API calls.
+	a.setOIDCSessionCookie(w, oidcIDTokenCookie, rawIDToken)
+
 	metrics.LoginsTotal.WithLabelValues("oidc", "success").Inc()
 	userJSON, _ := json.Marshal(user)
 	frag := url.Values{}
@@ -217,14 +252,53 @@ func (a *App) oidcFail(w http.ResponseWriter, r *http.Request, msg string) {
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
+// handleOIDCLogout drives RP-initiated logout. The frontend full-page-
+// navigates here after clearing its own session state. We:
+//  1. Always clear the cached id_token cookie so the next sign-in starts clean.
+//  2. If the deployment is in approval-required mode AND the IdP advertised an
+//     end_session_endpoint, redirect to it with id_token_hint and a return URL.
+//  3. Otherwise (corporate OIDC, no end_session_endpoint, missing cookie, etc.)
+//     silently fall back to /login — per spec, callers asked us to fail soft.
+func (a *App) handleOIDCLogout(w http.ResponseWriter, r *http.Request) {
+	loginURL := strings.TrimRight(a.Cfg.PublicBaseURL, "/") + "/login"
+
+	var idTokenHint string
+	if c, err := r.Cookie(oidcIDTokenCookie); err == nil {
+		idTokenHint = c.Value
+	}
+	clearCookie(w, oidcIDTokenCookie)
+
+	if !a.Cfg.RequiresUserApproval() || a.OIDC == nil || a.OIDC.endSessionEndpoint == "" {
+		http.Redirect(w, r, loginURL, http.StatusFound)
+		return
+	}
+
+	u, err := url.Parse(a.OIDC.endSessionEndpoint)
+	if err != nil {
+		http.Redirect(w, r, loginURL, http.StatusFound)
+		return
+	}
+	q := u.Query()
+	q.Set("post_logout_redirect_uri", loginURL)
+	q.Set("client_id", a.Cfg.OIDCClientID)
+	if idTokenHint != "" {
+		q.Set("id_token_hint", idTokenHint)
+	}
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
 func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *oidcClaims) (*User, error) {
 	// 1) match by (issuer, subject) — already linked
 	u := &User{}
 	err := a.DB.QueryRowContext(ctx,
-		`SELECT id, email, username, api_token, created_at FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2`,
+		`SELECT id, email, username, api_token, status, created_at FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2`,
 		issuer, claims.Sub,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.Status, &u.CreatedAt)
 	if err == nil {
+		if u.Status == UserStatusRejected {
+			return nil, errors.New("account has been rejected")
+		}
 		return u, nil
 	}
 	if err != sql.ErrNoRows {
@@ -235,9 +309,12 @@ func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *o
 	email := strings.ToLower(strings.TrimSpace(claims.Email))
 	if email != "" && (claims.EmailVerified == nil || *claims.EmailVerified) {
 		err = a.DB.QueryRowContext(ctx,
-			`SELECT id, email, username, api_token, created_at FROM users WHERE email = $1`, email,
-		).Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.CreatedAt)
+			`SELECT id, email, username, api_token, status, created_at FROM users WHERE email = $1`, email,
+		).Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.Status, &u.CreatedAt)
 		if err == nil {
+			if u.Status == UserStatusRejected {
+				return nil, errors.New("account has been rejected")
+			}
 			if _, err := a.DB.ExecContext(ctx,
 				`UPDATE users SET oidc_issuer = $1, oidc_subject = $2 WHERE id = $3`,
 				issuer, claims.Sub, u.ID,
@@ -264,12 +341,21 @@ func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *o
 	if err != nil {
 		return nil, err
 	}
-	var id string
+	// Status decision is made in SQL so the empty-DB bootstrap case is
+	// race-safe: the first ever user is always 'approved', even if two
+	// callbacks arrive simultaneously.
+	var id, status string
 	err = a.DB.QueryRowContext(ctx,
-		`INSERT INTO users (email, username, oidc_issuer, oidc_subject, api_token)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
-		email, username, issuer, claims.Sub, apiTok,
-	).Scan(&id, &u.CreatedAt)
+		`INSERT INTO users (email, username, oidc_issuer, oidc_subject, api_token, status)
+		 VALUES ($1, $2, $3, $4, $5,
+		     CASE
+		         WHEN $6::boolean AND EXISTS (SELECT 1 FROM users WHERE status = 'approved')
+		             THEN 'pending'
+		         ELSE 'approved'
+		     END)
+		 RETURNING id, status, created_at`,
+		email, username, issuer, claims.Sub, apiTok, a.Cfg.RequiresUserApproval(),
+	).Scan(&id, &status, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +363,7 @@ func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *o
 	u.Email = email
 	u.Username = username
 	u.APIToken = apiTok
+	u.Status = status
 	return u, nil
 }
 

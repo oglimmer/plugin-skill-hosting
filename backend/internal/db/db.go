@@ -32,6 +32,9 @@ var migration0006 string
 //go:embed migrations/0007_skill_file_versions.sql
 var migration0007 string
 
+//go:embed migrations/0008_user_approval.sql
+var migration0008 string
+
 func Open(url string) (*sql.DB, error) {
 	db, err := sql.Open("postgres", url)
 	if err != nil {
@@ -67,6 +70,9 @@ func Migrate(db *sql.DB) error {
 	}
 	if _, err := db.Exec(migration0007); err != nil {
 		return fmt.Errorf("0007_skill_file_versions: %w", err)
+	}
+	if _, err := db.Exec(migration0008); err != nil {
+		return fmt.Errorf("0008_user_approval: %w", err)
 	}
 	return nil
 }

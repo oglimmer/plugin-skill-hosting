@@ -40,6 +40,15 @@ type Config struct {
 	MetricsToken string
 }
 
+// RequiresUserApproval reports whether new users must be approved by an
+// existing approved user before they can access the system. The flow is
+// engaged only for OIDC mode without a Google Workspace domain allowlist —
+// password and "corporate" (domain-restricted) OIDC deployments still admit
+// users immediately.
+func (c Config) RequiresUserApproval() bool {
+	return c.AuthMode == "oidc" && len(c.AllowedGoogleWorkspaceDomains) == 0
+}
+
 func Load() Config {
 	c := Config{
 		DatabaseURL:   getenv("DATABASE_URL", "postgres://marketplace:marketplace@localhost:5432/marketplace?sslmode=disable"),

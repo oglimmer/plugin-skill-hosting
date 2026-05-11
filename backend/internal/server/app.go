@@ -19,11 +19,20 @@ type App struct {
 	OIDC *oidcRuntime // populated only when Cfg.AuthMode == "oidc"
 }
 
+// User account status values. The status column has a CHECK constraint on
+// these exact strings — keep them in sync with migration 0008.
+const (
+	UserStatusApproved = "approved"
+	UserStatusPending  = "pending"
+	UserStatusRejected = "rejected"
+)
+
 type User struct {
 	ID        string    `json:"id"`
 	Email     string    `json:"email"`
 	Username  string    `json:"username"`
 	APIToken  string    `json:"apiToken,omitempty"`
+	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 

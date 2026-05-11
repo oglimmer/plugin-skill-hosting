@@ -56,6 +56,10 @@ export const api = {
   regenerateToken: () =>
     request<{ apiToken: string }>('/api/me/token/regenerate', { method: 'POST' }),
   listUsers: () => request<UserSummary[]>('/api/users'),
+  approveUser: (id: string) =>
+    request<void>(`/api/users/${id}/approve`, { method: 'POST' }),
+  rejectUser: (id: string) =>
+    request<void>(`/api/users/${id}/reject`, { method: 'POST' }),
   listPlugins: () => request<Plugin[]>('/api/plugins'),
   getPlugin: (name: string) => request<Plugin>(`/api/plugins/${name}`),
   createPlugin: (data: Partial<Plugin>) =>

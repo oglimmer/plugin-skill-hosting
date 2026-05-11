@@ -1,7 +1,9 @@
 package server
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -120,5 +122,109 @@ func TestClearCookie(t *testing.T) {
 	}
 	if !strings.Contains(hdr, "Max-Age=0") {
 		t.Errorf("Max-Age=0 missing: %q", hdr)
+	}
+}
+
+// approvalApp returns an App configured for RP-initiated logout: open OIDC
+// (no Google Workspace domains) with a real end_session_endpoint stored on
+// the runtime so we don't need a live provider during tests.
+func approvalApp(endSession string) *App {
+	return &App{
+		Cfg: config.Config{
+			AuthMode:                      "oidc",
+			OIDCClientID:                  "test-client",
+			PublicBaseURL:                 "https://example.com",
+			AllowedGoogleWorkspaceDomains: nil,
+		},
+		OIDC: &oidcRuntime{endSessionEndpoint: endSession},
+	}
+}
+
+func TestOIDCLogout_RedirectsToIdPWithHint(t *testing.T) {
+	a := approvalApp("https://idp.example.com/realms/r/protocol/openid-connect/logout")
+	r := httptest.NewRequest("GET", "/api/auth/oidc/logout", nil)
+	r.AddCookie(&http.Cookie{Name: oidcIDTokenCookie, Value: "the.id.token"})
+	rec := httptest.NewRecorder()
+	a.handleOIDCLogout(rec, r)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("Location is not a url: %v", err)
+	}
+	if u.Host != "idp.example.com" {
+		t.Errorf("redirect host = %q, want idp.example.com", u.Host)
+	}
+	q := u.Query()
+	if got := q.Get("id_token_hint"); got != "the.id.token" {
+		t.Errorf("id_token_hint = %q, want the.id.token", got)
+	}
+	if got := q.Get("post_logout_redirect_uri"); got != "https://example.com/login" {
+		t.Errorf("post_logout_redirect_uri = %q", got)
+	}
+	if got := q.Get("client_id"); got != "test-client" {
+		t.Errorf("client_id = %q, want test-client", got)
+	}
+	// And the cookie should be cleared on the response.
+	if !strings.Contains(rec.Header().Get("Set-Cookie"), oidcIDTokenCookie+"=") {
+		t.Errorf("Set-Cookie does not clear id_token cookie: %q", rec.Header().Get("Set-Cookie"))
+	}
+}
+
+func TestOIDCLogout_FallsBackWhenNoEndSession(t *testing.T) {
+	a := approvalApp("") // IdP didn't advertise end_session_endpoint
+	r := httptest.NewRequest("GET", "/api/auth/oidc/logout", nil)
+	r.AddCookie(&http.Cookie{Name: oidcIDTokenCookie, Value: "x"})
+	rec := httptest.NewRecorder()
+	a.handleOIDCLogout(rec, r)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://example.com/login" {
+		t.Errorf("Location = %q, want fallback to /login", loc)
+	}
+}
+
+func TestOIDCLogout_CorporateModeStaysLocal(t *testing.T) {
+	// Corporate mode = OIDC with a Google Workspace domain configured. Even
+	// if the IdP exposes end_session_endpoint, we deliberately keep the user
+	// signed in upstream so workspace SSO across apps isn't disturbed.
+	a := &App{
+		Cfg: config.Config{
+			AuthMode:                      "oidc",
+			OIDCClientID:                  "c",
+			PublicBaseURL:                 "https://example.com",
+			AllowedGoogleWorkspaceDomains: []string{"acme.com"},
+		},
+		OIDC: &oidcRuntime{endSessionEndpoint: "https://idp.example.com/logout"},
+	}
+	r := httptest.NewRequest("GET", "/api/auth/oidc/logout", nil)
+	r.AddCookie(&http.Cookie{Name: oidcIDTokenCookie, Value: "x"})
+	rec := httptest.NewRecorder()
+	a.handleOIDCLogout(rec, r)
+
+	if loc := rec.Header().Get("Location"); loc != "https://example.com/login" {
+		t.Errorf("Location = %q, want local /login (corporate mode)", loc)
+	}
+}
+
+func TestOIDCLogout_MissingCookieStillRedirects(t *testing.T) {
+	a := approvalApp("https://idp.example.com/logout")
+	rec := httptest.NewRecorder()
+	a.handleOIDCLogout(rec, httptest.NewRequest("GET", "/api/auth/oidc/logout", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, "idp.example.com") {
+		t.Errorf("Location = %q, want IdP redirect even without cookie", loc)
+	}
+	u, _ := url.Parse(loc)
+	if u.Query().Get("id_token_hint") != "" {
+		t.Errorf("id_token_hint should be absent when cookie was missing, got %q", u.Query().Get("id_token_hint"))
 	}
 }
