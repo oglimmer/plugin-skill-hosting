@@ -41,7 +41,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/oglimmer/plugin-skill-hosting-backend:${{ github.ref_name }}
+            ghcr.io/oglimmer/plugin-skill-hosting-backend:${{ steps.version.outputs.version }}
             ghcr.io/oglimmer/plugin-skill-hosting-backend:latest
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
@@ -57,7 +57,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/oglimmer/plugin-skill-hosting-frontend:${{ github.ref_name }}
+            ghcr.io/oglimmer/plugin-skill-hosting-frontend:${{ steps.version.outputs.version }}
             ghcr.io/oglimmer/plugin-skill-hosting-frontend:latest
           build-args: |
             VITE_APP_VERSION=${{ steps.version.outputs.version }}
