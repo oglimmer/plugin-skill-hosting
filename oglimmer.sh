@@ -679,9 +679,15 @@ execute_release() {
     log_info "Updating frontend version to $new_version..."
     (cd "$FRONTEND_DIR" && npm version "$new_version" --no-git-tag-version)
 
+    # Update Helm chart version and appVersion
+    local chart_file="$SCRIPT_DIR/helm/plugin-skill-hosting/Chart.yaml"
+    log_info "Updating Helm chart version to $new_version..."
+    sed -i '' "s/^version:.*/version: $new_version/" "$chart_file"
+    sed -i '' "s/^appVersion:.*/appVersion: \"$new_version\"/" "$chart_file"
+
     # Commit, tag, and push — the tag push triggers the GitHub Actions release workflow
     log_info "Committing version changes and creating tag..."
-    git add "$FRONTEND_DIR/package.json" "$FRONTEND_DIR/package-lock.json"
+    git add "$FRONTEND_DIR/package.json" "$FRONTEND_DIR/package-lock.json" "$chart_file"
     git commit -m "Release v$new_version"
     git tag -a "v$new_version" -m "Release v$new_version"
 

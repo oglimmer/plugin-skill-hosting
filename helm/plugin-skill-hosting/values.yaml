@@ -44,7 +44,7 @@ backend:
   image:
     repository: ghcr.io/oglimmer/plugin-skill-hosting-backend
     pullPolicy: Always
-    tag: "latest"
+    tag: ""
 
   service:
     type: ClusterIP
@@ -82,7 +82,7 @@ frontend:
   image:
     repository: ghcr.io/oglimmer/plugin-skill-hosting-frontend
     pullPolicy: Always
-    tag: "latest"
+    tag: ""
 
   service:
     type: ClusterIP
