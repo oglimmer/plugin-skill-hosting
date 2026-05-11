@@ -274,7 +274,7 @@ watch(() => props.skillName, load)
       />
 
       <label>Description (used by Claude to decide when to use this skill)</label>
-      <input v-model="description" required />
+      <textarea v-model="description" required rows="6" class="description-textarea" />
 
       <label>Body (Markdown — becomes the contents of SKILL.md after the frontmatter)</label>
       <textarea v-model="body" />
@@ -357,7 +357,7 @@ watch(() => props.skillName, load)
         />
 
         <label>Description (used by Claude to decide when to use this skill)</label>
-        <input v-model="description" required />
+        <textarea v-model="description" required rows="6" class="description-textarea" />
 
         <label>Body (Markdown — becomes the contents of SKILL.md after the frontmatter)</label>
         <textarea v-model="body" />
@@ -565,6 +565,10 @@ watch(() => props.skillName, load)
 </template>
 
 <style scoped>
+.description-textarea {
+  min-height: 0;
+  resize: vertical;
+}
 .tabs {
   display: flex;
   gap: 4px;
