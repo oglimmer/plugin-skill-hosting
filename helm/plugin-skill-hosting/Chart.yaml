@@ -2,8 +2,8 @@ apiVersion: v2
 name: plugin-skill-hosting
 description: Self-hosted Claude Code plugin marketplace (backend + frontend + Postgres + git over HTTPS)
 type: application
-version: 0.1.16
-appVersion: "0.1.16"
+version: 0.1.17
+appVersion: "0.1.17"
 maintainers:
   - name: Oli
 keywords:
