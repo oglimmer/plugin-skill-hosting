@@ -14,7 +14,7 @@ RUN go mod tidy && CGO_ENABLED=0 go build \
               -X marketplace/internal/buildinfo.Time=${BUILD_TIME}" \
     -o /out/server ./cmd/marketplace
 
-FROM alpine:3.20
+FROM alpine:3.23
 RUN apk add --no-cache git ca-certificates && \
     git config --system user.name "marketplace" && \
     git config --system user.email "marketplace@local"
