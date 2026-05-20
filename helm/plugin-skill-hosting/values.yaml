@@ -108,7 +108,7 @@ postgres:
   enabled: true
   image:
     repository: postgres
-    tag: "18-alpine"
+    tag: "16-alpine"
     pullPolicy: IfNotPresent
   user: marketplace
   database: marketplace

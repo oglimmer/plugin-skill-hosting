@@ -55,6 +55,12 @@
         "gomod"
       ],
       "groupName": "Go dependencies"
+    },
+    {
+      "matchPackageNames": [
+        "postgres"
+      ],
+      "allowedVersions": "/^16(\\.|-|$)/"
     }
   ],
   "minimumReleaseAge": "7 days",
