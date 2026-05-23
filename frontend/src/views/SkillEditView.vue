@@ -578,8 +578,8 @@ watch(() => props.skillName, load)
     </template>
   </div>
 
-  <div v-if="isEdit" class="card">
-    <h2 style="margin-top: 0">Audit</h2>
+  <details v-if="isEdit" class="card collapsible-card">
+    <summary><h2>Audit</h2></summary>
     <table>
       <tbody>
         <tr>
@@ -592,7 +592,7 @@ watch(() => props.skillName, load)
         </tr>
       </tbody>
     </table>
-  </div>
+  </details>
 
   <SkillVersionHistory
     v-if="isEdit"
@@ -807,4 +807,26 @@ watch(() => props.skillName, load)
 }
 
 .editor-pane > .card { margin-bottom: 0; }
+
+.collapsible-card > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.collapsible-card > summary::-webkit-details-marker { display: none; }
+.collapsible-card > summary::before {
+  content: '▸';
+  display: inline-block;
+  font-size: 12px;
+  color: var(--text-soft);
+  transition: transform 0.15s ease;
+}
+.collapsible-card[open] > summary::before { transform: rotate(90deg); }
+.collapsible-card > summary > h2 {
+  margin: 0;
+  display: inline;
+}
+.collapsible-card[open] > summary { margin-bottom: 16px; }
 </style>

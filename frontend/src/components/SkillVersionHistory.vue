@@ -45,8 +45,13 @@ function fmt(d?: string | null) {
 </script>
 
 <template>
-  <div class="card">
-    <h2 style="margin-top: 0">Edit history</h2>
+  <details class="card collapsible-card">
+    <summary>
+      <h2>Edit history</h2>
+      <span v-if="!versionsError && versions.length" class="muted version-count">
+        {{ versions.length }} version{{ versions.length === 1 ? '' : 's' }}
+      </span>
+    </summary>
     <ErrorAlert :message="versionsError" />
     <p v-if="!versionsError && versions.length === 0" class="muted">No history yet.</p>
     <table v-else>
@@ -78,5 +83,32 @@ function fmt(d?: string | null) {
         </tr>
       </tbody>
     </table>
-  </div>
+  </details>
 </template>
+
+<style scoped>
+.collapsible-card > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.collapsible-card > summary::-webkit-details-marker { display: none; }
+.collapsible-card > summary::before {
+  content: '▸';
+  display: inline-block;
+  font-size: 12px;
+  color: var(--text-soft);
+  transition: transform 0.15s ease;
+}
+.collapsible-card[open] > summary::before { transform: rotate(90deg); }
+.collapsible-card > summary > h2 {
+  margin: 0;
+  display: inline;
+}
+.collapsible-card[open] > summary { margin-bottom: 16px; }
+.version-count {
+  font-size: 12px;
+}
+</style>
