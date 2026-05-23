@@ -8,7 +8,7 @@ resource "aws_s3_bucket" "frontend" {
 
   # Keep this true; the bucket is recreated rarely and force_destroy = true
   # would surprise-delete the SPA on rename. Use empty + apply if needed.
-  force_destroy = false
+  force_destroy = var.s3_force_destroy
 }
 
 resource "aws_s3_bucket_public_access_block" "frontend" {
@@ -64,7 +64,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "frontend" {
 
 resource "aws_s3_bucket" "logs" {
   bucket_prefix = "${local.name}-logs-"
-  force_destroy = false
+  force_destroy = var.s3_force_destroy
 }
 
 resource "aws_s3_bucket_public_access_block" "logs" {

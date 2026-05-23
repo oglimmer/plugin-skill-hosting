@@ -148,13 +148,24 @@ existing_private_subnet_ids = ["subnet-3...", "subnet-4..."]
 
 ### Tear-down
 
+Two guards block accidental destruction:
+
 ```bash
-terraform apply -var "db_deletion_protection=false"
+# 1. Drop the guards (one apply)
+terraform apply \
+  -var "db_deletion_protection=false" \
+  -var "s3_force_destroy=true"
+
+# 2. Tear everything down
 terraform destroy
 ```
 
-RDS final snapshot is taken as `<project>-<env>-db-final` when
-`db_deletion_protection = true` and skipped otherwise.
+`db_deletion_protection = false` lets RDS go (and skips the final snapshot;
+flip back to `true` for a snapshot before delete).
+
+`s3_force_destroy = true` lets TF delete the frontend + logs buckets even
+when they contain objects or noncurrent versions — without this you'd hit
+`BucketNotEmpty` and have to empty them by hand.
 
 ## Architectural & Security Audit Findings
 

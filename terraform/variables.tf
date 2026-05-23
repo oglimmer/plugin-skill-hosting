@@ -128,6 +128,12 @@ variable "db_deletion_protection" {
   default     = true
 }
 
+variable "s3_force_destroy" {
+  description = "Allow `terraform destroy` to wipe the frontend + logs buckets even if they contain objects or noncurrent versions. Flip to true before tear-down."
+  type        = bool
+  default     = false
+}
+
 # ---------------------------------------------------------------------------
 # Backend (ECS Fargate)
 # ---------------------------------------------------------------------------
