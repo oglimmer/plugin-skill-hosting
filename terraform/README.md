@@ -156,6 +156,25 @@ terraform destroy
 RDS final snapshot is taken as `<project>-<env>-db-final` when
 `db_deletion_protection = true` and skipped otherwise.
 
+## Architectural & Security Audit Findings
+
+A comprehensive security-first and Well-Architected review has identified the following recommended improvements:
+
+### 🔒 Security-First Enhancements
+
+1. **Transit Encryption (CloudFront ➔ ALB):** Currently, `origin_protocol_policy` is set to `"http-only"`. Traffic between CloudFront and the ALB traverses the network in plain text over port 80. To guarantee absolute encryption in transit, provision a custom domain and an ACM certificate, listen on HTTPS (443) at the ALB, and enforce `"https-only"` origin policies.
+2. **Enforce HTTPS on S3 Buckets:** Add an explicit `Deny` block for non-SSL requests (`aws:SecureTransport = false`) to both the `frontend` and `logs` S3 bucket policies to align with CIS benchmarks.
+3. **Read-Only Container Root Filesystem:** Secure the Fargate container by setting `readonlyRootFilesystem = true` in the task definition, mounting `/data` and `/tmp` as separate writable volumes.
+4. **WAF Web ACL Logging:** Add logging configuration to the AWS WAFv2 instance to enable auditing of blocked requests and rule group overrides.
+5. **ECS Exec Variable Control:** Make `enable_execute_command` on the ECS service configurable via a toggle so that interactive shell access can be disabled in production.
+
+### 🌐 Reliability & Scaling (The EFS Migration)
+
+* **Multi-Task Scaling:** Currently, compute capacity is constrained to a **single task** (`backend_desired_count = 1`) because git repositories reside on task-local ephemeral Fargate disk. In the event of task termination or deployment rollouts, the new container must rebuild/rematerialize all git repos from Postgres, causing high cold-start times.
+* **Remediation:** Provision and mount an **AWS Elastic File System (EFS)** to `/data` across multiple Fargate tasks. This permits horizontal scaling (`desired_count > 1`) and resolves the single point of failure (SPOF) while eliminating cold-start latency.
+
+---
+
 ## Notes / known limits
 
 - **MCP stream length.** CloudFront's default origin read timeout is 60s.
