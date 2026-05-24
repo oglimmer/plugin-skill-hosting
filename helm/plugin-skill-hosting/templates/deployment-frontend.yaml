@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "psh.frontend.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ .Values.frontend.replicaCount }}
   selector:
     matchLabels:
       {{- include "psh.frontend.selectorLabels" . | nindent 6 }}
@@ -25,6 +25,10 @@ spec:
       serviceAccountName: {{ include "psh.serviceAccountName" . }}
       containers:
       - name: {{ .Values.frontend.name }}
+        {{- with .Values.frontendSecurityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
         ports:

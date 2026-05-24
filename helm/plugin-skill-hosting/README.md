@@ -1,6 +1,6 @@
 # plugin-skill-hosting
 
-Self-hosted Claude Code plugin marketplace — backend (Go API + git smart-HTTP + MCP), frontend (Vue SPA behind nginx), Postgres, ingress, and a sealed secret for the application's secrets. The chart deploys everything needed to expose `https://<host>/marketplace.json` and `git clone https://<host>/git/<plugin>.git` to Claude Code clients.
+Self-hosted Claude Code plugin marketplace — backend (Go API + git smart-HTTP + MCP), frontend (Vue SPA behind nginx), Postgres, and ingress. The chart deploys everything needed to expose `https://<host>/marketplace.json` and `git clone https://<host>/git/<plugin>.git` to Claude Code clients. The application's `Secret` (containing `JWT_SECRET`, `POSTGRES_PASSWORD`, etc.) is **not** rendered by the chart — you bring your own; see [§Sealed secret](#sealed-secret).
 
 For an end-to-end product overview see the project [README](../../README.md).
 
@@ -51,9 +51,10 @@ helm upgrade --install plugin-skill-hosting . \
 | `Service` × 3 | ClusterIP services for backend / frontend / postgres |
 | `Ingress` | Routes `/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz` → backend, `/` → frontend |
 | `PersistentVolumeClaim` × 0–2 | `/data` for bare git repos (omitted when `backend.persistence.enabled=false`), Postgres data dir |
-| `SealedSecret` | `JWT_SECRET`, `ANTHROPIC_API_KEY`, `OIDC_CLIENT_SECRET`, `POSTGRES_PASSWORD` (or `DATABASE_URL`) |
 | `ServiceAccount` | Pod identity for backend + frontend |
 | `ConfigMap` | nginx config for the frontend |
+
+> **Not deployed by the chart** — the application `Secret` carrying `JWT_SECRET`, `POSTGRES_PASSWORD` (or `DATABASE_URL`), and the optional `ANTHROPIC_API_KEY`, `OIDC_CLIENT_SECRET`, and `METRICS_TOKEN`. Supply your own (plain `Secret`, `SealedSecret`, ExternalSecrets, …) — see [§Sealed secret](#sealed-secret).
 
 ## Configure
 
@@ -108,19 +109,31 @@ How startup works in this mode:
 
 ### Sealed secret
 
-The chart references a sealed secret named `plugin-skill-hosting-secret` (see `templates/sealed-secret.yaml`). Generate it before installing:
+The chart references — but does not create — a `Secret` holding the application's sensitive values. The chart resolves the name via the `psh.secretName` helper:
+
+- if `existingSecret` is set, that name is used;
+- otherwise it derives `<release>-<chart>-secret` (e.g. release `plugin-skill-hosting` → `plugin-skill-hosting-secret`).
+
+You are responsible for putting a matching `Secret` (or `SealedSecret`, or anything that produces one — ExternalSecrets, etc.) into the release namespace before the pods start. Keeping the secret outside the chart is deliberate: `SealedSecret` ciphertext is scoped to the controller's key and to a specific name + namespace, so it cannot be bundled with a reusable chart.
+
+Required keys: `JWT_SECRET`, and either `POSTGRES_PASSWORD` (when `postgres.enabled=true`) or `DATABASE_URL` (when `false`). Optional keys: `ANTHROPIC_API_KEY`, `OIDC_CLIENT_SECRET` (required when `auth.mode=oidc`), `METRICS_TOKEN` (required when `backend.metrics.exposeOnIngress=true`).
+
+Generate and seal one with `kubeseal`:
 
 ```bash
 kubectl create secret generic plugin-skill-hosting-secret \
+  --namespace plugin-skill-hosting \
   --dry-run=client -o yaml \
   --from-literal=JWT_SECRET=$(openssl rand -hex 32) \
   --from-literal=POSTGRES_PASSWORD=<db-password> \
-  --from-literal=ANTHROPIC_API_KEY=<optional, enables /api/skills/validate> \
-  --from-literal=OIDC_CLIENT_SECRET=<only when auth.mode=oidc> \
-  | kubeseal --format yaml > templates/sealed-secret.yaml
+  --from-literal=ANTHROPIC_API_KEY=<optional> \
+  --from-literal=OIDC_CLIENT_SECRET=<when auth.mode=oidc> \
+  | kubeseal --format yaml | kubectl apply -f -
 ```
 
 When `postgres.enabled=false`, replace `POSTGRES_PASSWORD` with `DATABASE_URL=postgres://user:pass@host:5432/db?sslmode=require`.
+
+The production deployment in this repo keeps its `SealedSecret` at [`helm/argocd/plugin-skill-hosting-sealed-secret.yaml`](../argocd/plugin-skill-hosting-sealed-secret.yaml) — apply it once with `kubectl apply -f` alongside the Argo CD `Application`.
 
 ## Install / upgrade / uninstall
 
@@ -144,7 +157,7 @@ Both PVCs (`-data` for git, Postgres data) survive `helm uninstall`. Snapshot th
 - **Non-root UID** — the backend container runs as UID 10001; `podSecurityContext.fsGroup: 10001` makes the `/data` PVC group-writable. If you change the image's user, update both.
 - **Git smart-HTTP** — needs `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"` and a generous `proxy-body-size` for pushes. Already set.
 - **MCP transport** — the `/mcp` endpoint keeps a long-lived SSE stream open, so `proxy-buffering: "off"` and `proxy-read-timeout: 3600` / `proxy-send-timeout: 3600` are required to keep the stream from being reaped after the default 60 s. Already set.
-- **`replicaCount`** — leave at `1`. The backend force-pushes to bare git repos on disk; multi-replica would need RWX storage or an external git layer, neither of which is currently supported.
+- **Replica counts are split per component.** `frontend.replicaCount` is safe to scale freely (nginx, stateless). `backend.replicaCount` must stay at `1` whenever `backend.persistence.enabled=true` and `backend.persistence.accessMode=ReadWriteOnce`, because the backend force-pushes to bare git repos on disk and multiple pods would either fail to attach the RWO PVC or race on the same files. The chart `fail`s at render time if you violate this. To run multiple backend pods, switch the PVC to `ReadWriteMany` on a shared storage class — or set `backend.persistence.enabled=false` plus `rematerializeOnStartup=true` (note: that gives each replica its *own* ephemeral `/data`, so pushes still aren't coordinated across pods).
 - **Probes** — `/healthz` (liveness + startup) always returns `200` so Kubernetes never kills a pod during re-materialization. `/readyz` (readiness) returns `503` while `rematerializeOnStartup` is running and `200` once complete, so traffic is only routed when git repos are available.
 - **External Postgres** — set `postgres.enabled=false` and put `DATABASE_URL` in the sealed secret. The chart's `postgres.*` block is then ignored.
 
@@ -154,7 +167,7 @@ This table is hand-maintained against `values.yaml`. Update both when adding or 
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `replicaCount` | int | `1` | Number of backend / frontend pods. Leave at 1 — backend uses RWO storage. |
+| `existingSecret` | string | `""` | Name of an existing `Secret`/`SealedSecret` holding the application's sensitive values. Empty = chart derives `<release>-<chart>-secret`. The chart never creates the secret itself — see [§Sealed secret](#sealed-secret). |
 | `publicBaseURL` | string | `"https://ai-plugins.oglimmer.com"` | Public HTTPS URL. Exposed to backend as `PUBLIC_BASE_URL` and embedded in `marketplace.json`. Must be `https://`. |
 | `marketplaceName` | string | `"oglimmer-marketplace"` | Name shown in `marketplace.json` (also used as the owner name). |
 | `defaultLicense` | string | `"MIT"` | Default license prefilled in the "new plugin" form. |
@@ -165,6 +178,7 @@ This table is hand-maintained against `values.yaml`. Update both when adding or 
 | `auth.oidc.redirectURL` | string | `""` | Defaults to `${publicBaseURL}/api/auth/oidc/callback` when empty. |
 | `auth.oidc.scopes` | string | `"openid email profile"` | Space-separated OIDC scopes. |
 | `auth.oidc.googleWorkspaceDomains` | list | `[]` | Allowlist of Google Workspace `hd` domains. Only enforced when the issuer is Google; ignored for any other IdP. Empty disables the check (a startup `WARN` is logged). With a single domain the auth URL also gets `hd=<domain>` so Google pre-filters the account chooser. |
+| `backend.replicaCount` | int | `1` | Number of backend pods. Must stay at 1 with `backend.persistence.enabled=true` + `accessMode=ReadWriteOnce` (chart fails at render otherwise). |
 | `backend.image.repository` | string | `"registry.oglimmer.com/plugin-skill-hosting-backend"` | Backend container image repository. |
 | `backend.image.tag` | string | `"latest"` | Backend image tag. Pin to a git sha in production for clean rollbacks. |
 | `backend.image.pullPolicy` | string | `"Always"` | Backend image pull policy. |
@@ -176,6 +190,7 @@ This table is hand-maintained against `values.yaml`. Update both when adding or 
 | `backend.persistence.storageClass` | string | `""` | StorageClass for the backend PVC. Empty uses the cluster default. |
 | `backend.persistence.accessMode` | string | `"ReadWriteOnce"` | Backend PVC access mode. |
 | `backend.resources` | object | requests 100m/128Mi, limits 500m/512Mi | Backend container resources. |
+| `frontend.replicaCount` | int | `1` | Number of frontend (nginx) pods. Safe to scale freely — stateless. |
 | `frontend.image.repository` | string | `"registry.oglimmer.com/plugin-skill-hosting-frontend"` | Frontend container image repository. |
 | `frontend.image.tag` | string | `"latest"` | Frontend image tag. |
 | `frontend.image.pullPolicy` | string | `"Always"` | Frontend image pull policy. |
@@ -202,7 +217,7 @@ This table is hand-maintained against `values.yaml`. Update both when adding or 
 | `serviceAccount.name` | string | `""` | Override the generated ServiceAccount name. |
 | `podSecurityContext.fsGroup` | int | `10001` | fsGroup matching the backend UID — required for the `/data` PVC to be group-writable. |
 | `securityContext` | object | non-root, runAsUser 10001, drop ALL caps | Backend container security context. |
-| `frontendSecurityContext` | object | drop ALL caps | Frontend container security context. |
+| `frontendSecurityContext` | object | drop ALL caps | Frontend container security context. Rendered onto the nginx container — set to `{}` to skip. |
 | `imagePullSecrets` | list | `[{name: oglimmerregistrykey}]` | Image pull secrets. Set `[]` for public images. |
 | `nodeSelector` | object | `{}` | Node selector for pods. |
 | `tolerations` | list | `[]` | Tolerations for pods. |

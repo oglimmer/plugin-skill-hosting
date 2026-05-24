@@ -129,8 +129,22 @@ Service account name
 {{- end }}
 
 {{/*
-Secret name (sealed-secret holds JWT_SECRET, POSTGRES_PASSWORD, optional DATABASE_URL)
+Secret name. Resolution order:
+  1. .Values.existingSecret — explicit override pointing at a Secret/SealedSecret
+     the user manages out-of-band (the chart does NOT create it).
+  2. "<fullname>-secret" — derived from the release; the user is still expected
+     to apply a matching Secret/SealedSecret separately, since the chart no
+     longer ships one (see helm/argocd/plugin-skill-hosting-sealed-secret.yaml
+     for the production deployment's SealedSecret).
+
+Required keys: JWT_SECRET, POSTGRES_PASSWORD (or DATABASE_URL when
+postgres.enabled=false). Optional keys: ANTHROPIC_API_KEY, OIDC_CLIENT_SECRET,
+METRICS_TOKEN.
 */}}
 {{- define "psh.secretName" -}}
-{{- printf "%s-secret" (include "psh.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- if .Values.existingSecret -}}
+{{- .Values.existingSecret -}}
+{{- else -}}
+{{- printf "%s-secret" (include "psh.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end }}

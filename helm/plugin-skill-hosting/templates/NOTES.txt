@@ -14,9 +14,13 @@
    be https://; the ingress TLS secret ({{ (index .Values.ingress.tls 0).secretName }})
    covers that.
 
-3. Before installing/upgrading, seal the application secret:
+3. Application secret. The chart does NOT create one — apply your own
+   Secret (or SealedSecret) named "{{ include "psh.secretName" . }}" in
+   namespace "{{ .Release.Namespace }}" before/while installing.
+   Override the name with --set existingSecret=<your-secret>.
 
    kubectl create secret generic {{ include "psh.secretName" . }} \
+     --namespace {{ .Release.Namespace }} \
      --dry-run=client -o yaml \
 {{- if .Values.postgres.enabled }}
      --from-literal=POSTGRES_PASSWORD=<db-password> \
@@ -25,7 +29,7 @@
      --from-literal=DATABASE_URL='postgres://user:pass@host:5432/db?sslmode=require' \
      --from-literal=JWT_SECRET=<32+chars> \
 {{- end }}
-     | kubeseal --format yaml > helm/plugin-skill-hosting/templates/sealed-secret.yaml
+     | kubeseal --format yaml | kubectl apply -f -
 
 4. Backend git data lives on PVC {{ include "psh.backend.fullname" . }}-data
 {{- if .Values.postgres.enabled }} and Postgres on {{ include "psh.postgres.fullname" . }}-data{{- end }}.

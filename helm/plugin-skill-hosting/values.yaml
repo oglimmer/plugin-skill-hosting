@@ -1,8 +1,25 @@
 # Default values for plugin-skill-hosting
 
-replicaCount: 1
+# Name of an existing Secret (or SealedSecret) holding the application's
+# sensitive values. When empty, the chart resolves the name to
+# "<release>-<chart>-secret" (see psh.secretName in templates/_helpers.tpl).
+# The chart does NOT create this Secret — supply one yourself (e.g. a
+# SealedSecret in your environment overlay, or a plain Secret produced by
+# `kubectl create secret generic ...`). Required keys:
+#   - JWT_SECRET
+#   - POSTGRES_PASSWORD          (when postgres.enabled=true)
+#   - DATABASE_URL               (when postgres.enabled=false)
+# Optional keys:
+#   - ANTHROPIC_API_KEY          (enables /api/skills/validate)
+#   - OIDC_CLIENT_SECRET         (when auth.mode=oidc)
+#   - METRICS_TOKEN              (when backend.metrics.exposeOnIngress=true)
+existingSecret: ""
 
 # Public URL (must be HTTPS — Claude Code rejects http:// plugin sources).
+# (The legacy top-level replicaCount is gone — replicas are now per-component:
+# see backend.replicaCount and frontend.replicaCount. Scaling them
+# independently matters because the backend owns RWO state, see
+# backend.persistence below.)
 # This is exposed to the backend as PUBLIC_BASE_URL and embedded in marketplace.json.
 publicBaseURL: "https://ai-plugins.oglimmer.com"
 
@@ -41,6 +58,16 @@ auth:
 # Backend (API + git smart-HTTP) configuration
 backend:
   name: api
+  # Number of backend pods. Must stay at 1 when persistence.enabled=true and
+  # persistence.accessMode is ReadWriteOnce — multiple replicas would either
+  # fail to schedule (the PVC can only attach to one node) or, on storage
+  # classes that silently allow it, race on the same git repo on disk and
+  # corrupt it. The chart enforces this with a hard fail at render time.
+  # To run >1 replica: switch persistence.accessMode to ReadWriteMany on a
+  # shared storage class, or set persistence.enabled=false together with
+  # rematerializeOnStartup=true (note: that still gives each pod its own
+  # ephemeral /data, so concurrent pushes are *not* coordinated).
+  replicaCount: 1
   image:
     repository: ghcr.io/oglimmer/plugin-skill-hosting-backend
     pullPolicy: Always
@@ -84,6 +111,9 @@ backend:
 # Frontend (nginx serving the SPA) configuration
 frontend:
   name: web
+  # Number of frontend (nginx) pods. Safe to scale freely — the frontend is
+  # stateless and holds no PVC.
+  replicaCount: 1
   image:
     repository: ghcr.io/oglimmer/plugin-skill-hosting-frontend
     pullPolicy: Always

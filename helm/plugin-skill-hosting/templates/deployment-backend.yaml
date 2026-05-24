@@ -1,3 +1,6 @@
+{{- if and .Values.backend.persistence.enabled (eq .Values.backend.persistence.accessMode "ReadWriteOnce") (gt (int .Values.backend.replicaCount) 1) }}
+{{- fail "backend.replicaCount > 1 is unsafe with backend.persistence.enabled=true and ReadWriteOnce storage: pods would race on the same git repo on disk. Set backend.persistence.accessMode=ReadWriteMany on a shared storage class, or scale back to 1 replica." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,7 +8,7 @@ metadata:
   labels:
     {{- include "psh.backend.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ .Values.backend.replicaCount }}
   strategy:
     type: Recreate
   selector:
