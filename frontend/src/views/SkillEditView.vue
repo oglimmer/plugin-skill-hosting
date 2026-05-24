@@ -79,11 +79,6 @@ const SEVERITY_ORDER: Record<FindingSeverity, number> = {
   warning: 1,
   info: 2,
 }
-const SEVERITY_LABEL: Record<FindingSeverity, string> = {
-  problem: 'Problem',
-  warning: 'Warning',
-  info: 'Info',
-}
 
 const sortedFindings = computed(() => {
   if (!validationReport.value) return []
@@ -343,610 +338,1235 @@ watch(() => props.skillName, load)
 </script>
 
 <template>
-  <div class="row" style="margin-bottom: 16px">
-    <h1 style="margin: 0">{{ isEdit ? `Edit skill: ${skillName}` : 'New skill' }}</h1>
-    <div class="spacer" />
-    <button v-if="isEdit" class="danger" @click="deleteSkill">Delete skill</button>
-  </div>
-
-  <!-- Create mode: simple single-column form (no file tree until skill exists) -->
-  <div v-if="!isEdit" class="card">
-    <input
-      ref="importInput"
-      type="file"
-      accept=".zip,application/zip"
-      style="display: none"
-      @change="onImportFile"
-    />
-    <div class="row" style="margin-bottom: 16px; gap: 8px; flex-wrap: wrap; align-items: center">
-      <p class="muted" style="margin: 0; flex: 1; min-width: 240px">
-        Have a skill already packaged as a ZIP? Import its <code>SKILL.md</code> and
-        <code>scripts/</code>, <code>references/</code>, <code>assets/</code> folders in one go.
-      </p>
-      <button
-        type="button"
-        class="secondary"
-        :disabled="importing"
-        @click="triggerImport"
-      >
-        {{ importing ? 'Importing…' : 'Import from ZIP' }}
-      </button>
-    </div>
-
-    <form @submit.prevent="submit">
-      <label>Skill name (slug, lowercase, [a-z0-9-])</label>
-      <input
-        v-model="name"
-        required
-        pattern="[a-z0-9][a-z0-9-]{1,62}[a-z0-9]"
-      />
-
-      <label>Description (used by Claude to decide when to use this skill)</label>
-      <textarea
-        v-model="description"
-        required
-        rows="6"
-        class="description-textarea"
-        @input="markTouched"
-      />
-
-      <details class="extra-frontmatter" :open="!!extraFrontmatter">
-        <summary>Extra YAML frontmatter (advanced)</summary>
-        <p class="muted extra-frontmatter-hint">
-          Optional YAML lines emitted into <code>SKILL.md</code> between
-          <code>name/description</code> and the closing <code>---</code>.
-          Use this for keys like <code>allowed-tools</code>, <code>license</code>,
-          or other metadata Claude Code recognises.
-        </p>
-        <textarea
-          v-model="extraFrontmatter"
-          rows="4"
-          class="extra-frontmatter-textarea"
-          spellcheck="false"
-          placeholder="allowed-tools:&#10;  - Read&#10;  - Edit"
-          @input="markTouched"
-        />
-      </details>
-
-      <label>Body (Markdown — becomes the contents of SKILL.md after the frontmatter)</label>
-      <div @input="markTouched" @keydown="markTouched">
-        <MarkdownEditor v-model="body" />
+  <div class="se">
+    <!-- Action bar: identity + primary actions, sticky under nav -->
+    <header class="se-bar">
+      <div class="se-bar__id">
+        <span class="se-bar__kind">{{ isEdit ? 'EDIT' : 'NEW' }}</span>
+        <span class="se-bar__divider"></span>
+        <code class="se-bar__path">
+          {{ pluginName }}/<span class="se-bar__leaf">{{ isEdit ? skillName : '…' }}</span>
+        </code>
+        <span v-if="isDirty" class="se-bar__state" title="Unsaved changes">
+          <span class="se-bar__dot"></span>unsaved
+        </span>
       </div>
-
-      <ErrorAlert :message="error" />
-      <div class="row" style="margin-top: 16px; gap: 8px; flex-wrap: wrap">
-        <button type="submit" :disabled="loading || importing">
-          {{ loading ? 'Saving…' : 'Create skill' }}
-        </button>
+      <div class="se-bar__actions">
+        <button
+          v-if="isEdit"
+          type="button"
+          class="se-btn se-btn--danger"
+          @click="deleteSkill"
+        >delete</button>
         <button
           type="button"
-          class="secondary"
+          class="se-btn"
+          @click="cancel"
+        >cancel</button>
+        <button
+          type="button"
+          class="se-btn"
           :disabled="validating || (!description && !body)"
           @click="validate"
-        >
-          {{ validating ? 'Validating…' : 'Validate' }}
-        </button>
-        <button type="button" class="secondary" @click="cancel">Cancel</button>
+        >{{ validating ? 'validating…' : 'validate' }}</button>
+        <button
+          type="button"
+          class="se-btn se-btn--primary"
+          :disabled="loading || importing"
+          @click="submit"
+        >{{ loading ? 'saving…' : (isEdit ? 'save' : 'create') }}</button>
       </div>
-      <p class="muted" style="margin-top: 12px">
-        Supporting files (scripts/, references/, assets/) can be added after the skill is created.
-      </p>
-    </form>
-  </div>
+    </header>
 
-  <!-- Edit mode: tabs -->
-  <div v-else>
-    <input
-      ref="scriptsInput"
-      type="file"
-      multiple
-      style="display: none"
-      @change="onUploadChange('scripts', $event)"
-    />
-    <input
-      ref="referencesInput"
-      type="file"
-      multiple
-      style="display: none"
-      @change="onUploadChange('references', $event)"
-    />
-    <input
-      ref="assetsInput"
-      type="file"
-      multiple
-      style="display: none"
-      @change="onUploadChange('assets', $event)"
-    />
-    <nav class="tabs">
+    <!-- ZIP import bar (new mode only) -->
+    <div v-if="!isEdit" class="se-notice">
+      <input
+        ref="importInput"
+        type="file"
+        accept=".zip,application/zip"
+        hidden
+        @change="onImportFile"
+      />
+      <span class="se-notice__text">
+        already packaged as a ZIP? imports <code>SKILL.md</code>, <code>scripts/</code>, <code>references/</code>, <code>assets/</code> in one go.
+      </span>
       <button
         type="button"
-        class="tab"
-        :class="{ 'tab--active': tab === 'skill' }"
+        class="se-btn se-btn--ghost"
+        :disabled="importing"
+        @click="triggerImport"
+      >{{ importing ? 'importing…' : 'import zip ↗' }}</button>
+    </div>
+
+    <!-- Tabs (edit mode only) -->
+    <nav v-if="isEdit" class="se-tabs" role="tablist">
+      <button
+        type="button"
+        class="se-tab"
+        role="tab"
+        :class="{ 'se-tab--active': tab === 'skill' }"
+        :aria-selected="tab === 'skill'"
         @click="tab = 'skill'"
-      >
-        SKILL
-        <span class="tab-hint">SKILL.md</span>
-      </button>
+      >SKILL.md</button>
       <button
         type="button"
-        class="tab"
-        :class="{ 'tab--active': tab === 'more' }"
+        class="se-tab"
+        role="tab"
+        :class="{ 'se-tab--active': tab === 'more' }"
+        :aria-selected="tab === 'more'"
         @click="tab = 'more'"
       >
-        MORE
-        <span class="tab-hint">
-          {{ files.length === 0 ? 'scripts · references · assets' : `${files.length} file${files.length === 1 ? '' : 's'}` }}
-        </span>
+        files
+        <span class="se-tab__count">[{{ files.length }}]</span>
       </button>
     </nav>
 
-    <!-- SKILL tab: simple description + body editor -->
-    <div v-if="tab === 'skill'" class="card">
-      <form @submit.prevent="submit">
-        <label>Skill name (slug, lowercase, [a-z0-9-])</label>
+    <!-- SKILL form (new + edit/skill-tab share this) -->
+    <form
+      v-if="!isEdit || tab === 'skill'"
+      class="se-form"
+      @submit.prevent="submit"
+    >
+      <div class="se-field">
+        <label class="se-field__label">name</label>
+        <div v-if="isEdit" class="se-field__readonly">{{ name }}</div>
         <input
+          v-else
           v-model="name"
-          disabled
+          required
           pattern="[a-z0-9][a-z0-9-]{1,62}[a-z0-9]"
+          placeholder="my-skill-slug"
+          class="se-field__input"
         />
+        <p v-if="!isEdit" class="se-field__hint">lowercase letters, digits, hyphens · used as the skill directory name</p>
+      </div>
 
-        <label>Description (used by Claude to decide when to use this skill)</label>
+      <div class="se-field">
+        <label class="se-field__label">description</label>
         <textarea
           v-model="description"
           required
-          rows="6"
-          class="description-textarea"
+          rows="3"
+          class="se-field__textarea"
+          placeholder="One sentence — what does this skill do, and when should Claude reach for it?"
           @input="markTouched"
         />
+        <p class="se-field__hint">read by claude to decide when to invoke · keep it terse</p>
+      </div>
 
-        <details class="extra-frontmatter" :open="!!extraFrontmatter">
-          <summary>Extra YAML frontmatter (advanced)</summary>
-          <p class="muted extra-frontmatter-hint">
-            Optional YAML lines emitted into <code>SKILL.md</code> between
-            <code>name/description</code> and the closing <code>---</code>.
-            Imported skills preserve these verbatim.
+      <details class="se-field se-field--collapse" :open="!!extraFrontmatter">
+        <summary class="se-field__summary">
+          <span class="se-field__toggle" aria-hidden="true"></span>
+          <span class="se-field__summary-label">extra frontmatter</span>
+          <span class="se-field__summary-tag">advanced</span>
+          <span class="spacer"></span>
+          <span class="se-field__summary-hint" aria-hidden="true">
+            <span class="se-field__summary-hint-open">expand</span>
+            <span class="se-field__summary-hint-close">collapse</span>
+            <span class="se-field__summary-chev">▸</span>
+          </span>
+        </summary>
+        <div class="se-field__collapse-body">
+          <p class="se-field__hint">
+            YAML lines emitted into <code>SKILL.md</code> between name/description and the closing <code>---</code>.
+            Use for keys like <code>allowed-tools</code>, <code>license</code>.
           </p>
           <textarea
             v-model="extraFrontmatter"
-            rows="4"
-            class="extra-frontmatter-textarea"
+            rows="3"
+            class="se-field__textarea se-field__textarea--code"
             spellcheck="false"
             placeholder="allowed-tools:&#10;  - Read&#10;  - Edit"
             @input="markTouched"
           />
-        </details>
+        </div>
+      </details>
 
-        <label>Body (Markdown — becomes the contents of SKILL.md after the frontmatter)</label>
-        <div @input="markTouched" @keydown="markTouched">
+      <div class="se-field">
+        <label class="se-field__label">
+          body <span class="se-field__label-tag">markdown · becomes SKILL.md content</span>
+        </label>
+        <div class="se-field__editor" @input="markTouched" @keydown="markTouched">
           <MarkdownEditor v-model="body" />
         </div>
+      </div>
 
-        <ErrorAlert :message="error" />
-        <div class="row" style="margin-top: 16px; gap: 8px; flex-wrap: wrap">
-          <button type="submit" :disabled="loading">
-            {{ loading ? 'Saving…' : 'Save' }}
-          </button>
-          <button
-            type="button"
-            class="secondary"
-            :disabled="validating || (!description && !body)"
-            @click="validate"
-          >
-            {{ validating ? 'Validating…' : 'Validate' }}
-          </button>
-          <button type="button" class="secondary" @click="cancel">Cancel</button>
-        </div>
-      </form>
-    </div>
+      <ErrorAlert :message="error" />
 
-    <!-- MORE tab: file tree + per-file editor -->
-    <div v-else class="skill-editor">
-      <aside class="file-tree card">
-        <p class="muted" style="margin-top: 0">
-          Optional supporting files Claude can use alongside SKILL.md. Most skills don't need any.
+      <p v-if="!isEdit" class="se-form__foot">
+        supporting files — <code>scripts/</code>, <code>references/</code>, <code>assets/</code> — can be added once the skill exists.
+      </p>
+    </form>
+
+    <!-- FILES tab (edit mode only) -->
+    <div v-else-if="tab === 'more'" class="se-files">
+      <input ref="scriptsInput" type="file" multiple hidden
+             @change="onUploadChange('scripts', $event)" />
+      <input ref="referencesInput" type="file" multiple hidden
+             @change="onUploadChange('references', $event)" />
+      <input ref="assetsInput" type="file" multiple hidden
+             @change="onUploadChange('assets', $event)" />
+
+      <aside class="se-tree">
+        <p class="se-tree__intro">
+          optional supporting files claude can load alongside SKILL.md. most skills don't need any.
         </p>
         <ErrorAlert v-if="!selectedPath && fileError" :message="fileError" />
-        <div v-for="folder in FOLDER_ORDER" :key="folder" class="tree-folder"
-             @dragover.prevent
-             @drop="onDrop(folder, $event)">
-          <header class="tree-folder-header">
-            <span class="tree-folder-name">{{ folder }}/</span>
-            <span class="spacer" />
+
+        <div
+          v-for="folder in FOLDER_ORDER"
+          :key="folder"
+          class="se-tree__group"
+          @dragover.prevent
+          @drop="onDrop(folder, $event)"
+        >
+          <header class="se-tree__head">
+            <span class="se-tree__name">{{ folder }}/</span>
+            <span class="se-tree__count">[{{ filesByFolder[folder].length }}]</span>
+            <span class="spacer"></span>
             <button
               type="button"
-              class="iconbtn"
+              class="se-tree__act"
               title="New file"
               @click="promptNewFile(folder)"
             >+ new</button>
             <button
               type="button"
-              class="iconbtn"
+              class="se-tree__act"
               title="Upload files"
               @click="triggerUpload(folder)"
             >↑ upload</button>
           </header>
-          <p class="tree-folder-hint muted">{{ FOLDER_HINT[folder] }}</p>
-          <ul class="tree-list">
+          <p class="se-tree__hint">{{ FOLDER_HINT[folder] }}</p>
+          <ul class="se-tree__list">
             <li v-for="f in filesByFolder[folder]" :key="f.path">
               <button
                 type="button"
-                class="tree-item tree-item--file"
-                :class="{ 'tree-item--active': selectedPath === f.path }"
+                class="se-tree__item"
+                :class="{ 'se-tree__item--active': selectedPath === f.path }"
                 @click="selectFile(f.path)"
               >
-                <span class="tree-item-name">{{ f.path.slice(folder.length + 1) }}</span>
-                <span class="tree-item-meta muted">
-                  {{ f.isBinary ? 'bin' : 'txt' }} · {{ fmtBytes(f.sizeBytes) }}
-                </span>
+                <span class="se-tree__chev">{{ selectedPath === f.path ? '▸' : '·' }}</span>
+                <span class="se-tree__item-name">{{ f.path.slice(folder.length + 1) }}</span>
+                <span class="se-tree__item-meta">{{ f.isBinary ? 'bin' : 'txt' }} · {{ fmtBytes(f.sizeBytes) }}</span>
               </button>
             </li>
-            <li v-if="filesByFolder[folder].length === 0" class="tree-empty muted">empty</li>
+            <li v-if="filesByFolder[folder].length === 0" class="se-tree__empty">
+              · empty · drop files here
+            </li>
           </ul>
         </div>
       </aside>
 
-      <section class="editor-pane">
-        <div v-if="selectedPath === null" class="card empty-state">
-          <h2 style="margin-top: 0">No file selected</h2>
-          <p class="muted">
-            Pick a file on the left, or use <code>+ new</code> / <code>↑ upload</code>
-            to add one. You can also drag-drop files onto a folder header.
+      <section class="se-pane">
+        <div v-if="selectedPath === null" class="se-pane__empty">
+          <p class="se-pane__empty-title">no file selected</p>
+          <p class="se-pane__empty-hint">
+            pick one on the left · or use <code>+ new</code> / <code>↑ upload</code> · drag-drop also works
           </p>
         </div>
 
-        <div v-else class="card">
-          <div class="row" style="align-items: baseline; gap: 12px; flex-wrap: wrap">
-            <h2 style="margin: 0">{{ selectedPath }}</h2>
-            <span class="badge">{{ fileIsBinary ? 'binary' : 'text' }}</span>
-            <span class="muted">{{ fmtBytes(fileSize) }}</span>
-            <span class="spacer" />
-            <button
-              v-if="!fileLoading"
-              type="button"
-              class="secondary"
-              @click="downloadCurrentFile"
-            >Download</button>
-            <button
-              v-if="!fileLoading"
-              type="button"
-              class="danger"
-              @click="deleteCurrentFile"
-            >Delete</button>
-          </div>
+        <template v-else>
+          <header class="se-pane__head">
+            <code class="se-pane__path">{{ selectedPath }}</code>
+            <span class="se-pane__meta">{{ fileIsBinary ? 'binary' : 'text' }} · {{ fmtBytes(fileSize) }}</span>
+            <span class="spacer"></span>
+            <button v-if="!fileLoading" type="button" class="se-btn" @click="downloadCurrentFile">download</button>
+            <button v-if="!fileLoading" type="button" class="se-btn se-btn--danger" @click="deleteCurrentFile">delete</button>
+          </header>
 
-          <p v-if="fileLoading" class="muted">Loading…</p>
+          <p v-if="fileLoading" class="se-pane__loading">loading…</p>
           <ErrorAlert v-else-if="fileError" :message="fileError" />
 
           <template v-else>
             <textarea
               v-if="!fileIsBinary"
               v-model="fileContent"
+              class="se-pane__editor"
+              spellcheck="false"
               @input="fileDirty = true"
-              style="margin-top: 14px; min-height: 360px"
             />
-            <p v-else class="muted" style="margin-top: 14px">
-              Binary content cannot be edited inline. Use Download to fetch it,
-              or upload a new version by dragging a replacement onto the
-              <code>{{ selectedPath.split('/')[0] }}/</code> folder.
+            <p v-else class="se-pane__binary">
+              binary file — cannot edit inline. download or upload a replacement onto <code>{{ selectedPath.split('/')[0] }}/</code>.
             </p>
 
-            <div class="row" style="margin-top: 14px; gap: 8px">
+            <div v-if="!fileIsBinary" class="se-pane__actions">
               <button
-                v-if="!fileIsBinary"
                 type="button"
+                class="se-btn se-btn--primary"
                 :disabled="!fileDirty"
                 @click="saveCurrentFile"
-              >Save</button>
+              >save file</button>
             </div>
           </template>
-        </div>
+        </template>
       </section>
     </div>
-  </div>
 
-  <div v-if="validating || validationError || validationReport" class="card review">
-    <h2 style="margin-top: 0">Claude review</h2>
-    <p v-if="validating" class="muted">Asking Claude to review the skill…</p>
-    <ErrorAlert :message="validationError" />
+    <!-- Claude review (after validate) -->
+    <section
+      v-if="validating || validationError || validationReport"
+      class="se-section"
+    >
+      <header class="se-section__head">
+        <span class="se-section__title">claude review</span>
+      </header>
 
-    <template v-if="validationReport">
-      <p v-if="validationReport.summary" class="review-summary">
-        {{ validationReport.summary }}
-      </p>
+      <p v-if="validating" class="se-section__loading">asking claude to review the skill…</p>
+      <ErrorAlert :message="validationError" />
 
-      <div class="review-counts">
-        <span class="finding-chip problem" v-if="findingCounts.problem">
-          {{ findingCounts.problem }} Problem<span v-if="findingCounts.problem !== 1">s</span>
-        </span>
-        <span class="finding-chip warning" v-if="findingCounts.warning">
-          {{ findingCounts.warning }} Warning<span v-if="findingCounts.warning !== 1">s</span>
-        </span>
-        <span class="finding-chip info" v-if="findingCounts.info">
-          {{ findingCounts.info }} Info
-        </span>
-        <span v-if="!sortedFindings.length" class="muted">
-          No issues found — looks good.
-        </span>
-      </div>
+      <template v-if="validationReport">
+        <p v-if="validationReport.summary" class="se-review__summary">
+          {{ validationReport.summary }}
+        </p>
 
-      <ul v-if="sortedFindings.length" class="findings">
-        <li
-          v-for="(f, i) in sortedFindings"
-          :key="`${f.severity}:${f.title}:${i}`"
-          class="finding"
-          :class="`finding--${f.severity}`"
-        >
-          <div class="finding-head">
-            <span class="finding-chip" :class="f.severity">{{ SEVERITY_LABEL[f.severity] }}</span>
-            <span class="finding-title">{{ f.title }}</span>
-          </div>
-          <p class="finding-detail">{{ f.detail }}</p>
-        </li>
-      </ul>
-
-      <div v-if="validationReport.suggestedDescription" class="suggested-desc">
-        <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px">
-          <div>
-            <div class="suggested-desc-label">Suggested description</div>
-            <div class="suggested-desc-text">{{ validationReport.suggestedDescription }}</div>
-          </div>
-          <button type="button" class="secondary" @click="applySuggestedDescription">
-            Apply
-          </button>
+        <div class="se-review__counts">
+          <span v-if="findingCounts.problem" class="se-tag se-tag--problem">
+            {{ findingCounts.problem }} problem<span v-if="findingCounts.problem !== 1">s</span>
+          </span>
+          <span v-if="findingCounts.warning" class="se-tag se-tag--warning">
+            {{ findingCounts.warning }} warning<span v-if="findingCounts.warning !== 1">s</span>
+          </span>
+          <span v-if="findingCounts.info" class="se-tag se-tag--info">
+            {{ findingCounts.info }} info
+          </span>
+          <span v-if="!sortedFindings.length" class="se-review__pass">
+            · no issues found
+          </span>
         </div>
-      </div>
-    </template>
+
+        <ul v-if="sortedFindings.length" class="se-findings">
+          <li
+            v-for="(f, i) in sortedFindings"
+            :key="`${f.severity}:${f.title}:${i}`"
+            class="se-finding"
+            :class="`se-finding--${f.severity}`"
+          >
+            <div class="se-finding__head">
+              <span class="se-finding__sev">[{{ f.severity }}]</span>
+              <span class="se-finding__title">{{ f.title }}</span>
+            </div>
+            <p class="se-finding__detail">{{ f.detail }}</p>
+          </li>
+        </ul>
+
+        <div v-if="validationReport.suggestedDescription" class="se-suggest">
+          <div class="se-suggest__body">
+            <div class="se-suggest__label">→ suggested description</div>
+            <div class="se-suggest__text">{{ validationReport.suggestedDescription }}</div>
+          </div>
+          <button type="button" class="se-btn" @click="applySuggestedDescription">apply</button>
+        </div>
+      </template>
+    </section>
+
+    <!-- Audit (edit only) -->
+    <details v-if="isEdit" class="se-disclosure">
+      <summary class="se-disclosure__head">
+        <span class="se-disclosure__toggle" aria-hidden="true"></span>
+        <span class="se-disclosure__title">audit</span>
+        <span class="spacer"></span>
+        <span class="se-disclosure__hint" aria-hidden="true">
+          <span class="se-disclosure__hint-open">expand</span>
+          <span class="se-disclosure__hint-close">collapse</span>
+          <span class="se-disclosure__chev">▸</span>
+        </span>
+      </summary>
+      <dl class="se-audit">
+        <dt>created</dt>
+        <dd>{{ audit.createdByName || '—' }} <span class="se-audit__dim">· {{ fmt(audit.createdAt) }}</span></dd>
+        <dt>last edit</dt>
+        <dd>{{ audit.updatedByName || '—' }} <span class="se-audit__dim">· {{ fmt(audit.updatedAt) }}</span></dd>
+      </dl>
+    </details>
+
+    <!-- Version history (edit only) -->
+    <SkillVersionHistory
+      v-if="isEdit"
+      ref="versionHistory"
+      :plugin-name="pluginName"
+      :skill-name="skillName"
+      @revert="revert"
+    />
   </div>
-
-  <details v-if="isEdit" class="card collapsible-card">
-    <summary><h2>Audit</h2></summary>
-    <table>
-      <tbody>
-        <tr>
-          <th>Created</th>
-          <td>{{ audit.createdByName || '—' }} · {{ fmt(audit.createdAt) }}</td>
-        </tr>
-        <tr>
-          <th>Last edited</th>
-          <td>{{ audit.updatedByName || '—' }} · {{ fmt(audit.updatedAt) }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </details>
-
-  <SkillVersionHistory
-    v-if="isEdit"
-    ref="versionHistory"
-    :plugin-name="pluginName"
-    :skill-name="skillName"
-    @revert="revert"
-  />
 </template>
 
 <style scoped>
-.description-textarea {
-  min-height: 0;
-  resize: vertical;
+.se {
+  /* Tight container — reset the spacious global feel. */
+  margin-top: -16px;
 }
-.extra-frontmatter {
-  margin: 0 0 16px;
-  border: 1px solid var(--border-soft, var(--border));
-  border-radius: 4px;
-  padding: 8px 12px;
-}
-.extra-frontmatter > summary {
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--text-soft);
-}
-.extra-frontmatter[open] > summary {
-  color: var(--text);
-  margin-bottom: 8px;
-}
-.extra-frontmatter-hint {
-  margin: 4px 0 8px;
-  font-size: 12px;
-}
-.extra-frontmatter-textarea {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  min-height: 0;
-  resize: vertical;
-  white-space: pre;
-}
-.tabs {
+
+/* ─── Action bar ───────────────────────────────────────────────── */
+.se-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
-  gap: 4px;
-  margin-bottom: 24px;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  margin: 0 -16px 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border);
 }
-.tab {
+.se-bar__id {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.se-bar__kind {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: var(--accent);
+  padding: 3px 8px;
+  border: 1px solid var(--accent);
+  background: transparent;
+}
+.se-bar__divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+.se-bar__path {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-soft);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.se-bar__leaf { color: var(--text); }
+.se-bar__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+}
+.se-bar__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(245, 165, 36, 0.55);
+  animation: se-pulse 2.2s infinite;
+}
+@keyframes se-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(245, 165, 36, 0.5); }
+  70%  { box-shadow: 0 0 0 8px rgba(245, 165, 36, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 165, 36, 0); }
+}
+.se-bar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ─── Flat button system (overrides global animated buttons) ───── */
+.se-btn {
+  /* fully neutralize the global animated button */
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 6px 12px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.se-btn::before { display: none; content: none; }
+.se-btn:hover {
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: none;
+}
+.se-btn:active { transform: none; }
+.se-btn:disabled,
+.se-btn:disabled:hover {
+  opacity: 0.35;
+  cursor: not-allowed;
+  color: var(--text-soft);
+  border-color: var(--border);
+}
+
+.se-btn--primary {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.se-btn--primary:hover {
+  color: var(--bg);
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+}
+
+.se-btn--danger {
+  color: var(--rust);
+  border-color: rgba(214, 90, 49, 0.5);
+}
+.se-btn--danger:hover {
+  color: var(--text);
+  background: var(--rust);
+  border-color: var(--rust);
+}
+
+.se-btn--ghost {
+  border-color: transparent;
+  color: var(--text-soft);
+}
+.se-btn--ghost:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: transparent;
+}
+
+/* ─── Import notice (new mode) ─────────────────────────────────── */
+.se-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  margin-top: 16px;
+  border-left: 2px solid var(--accent);
+  background: rgba(245, 165, 36, 0.04);
+}
+.se-notice__text {
+  flex: 1 1 240px;
+  font-size: 12.5px;
+  color: var(--text-soft);
+  line-height: 1.55;
+}
+
+/* ─── Tabs ─────────────────────────────────────────────────────── */
+.se-tabs {
+  display: flex;
+  gap: 0;
+  margin: 20px 0 0;
+  border-bottom: 1px solid var(--border);
+}
+.se-tab {
   background: transparent;
   color: var(--text-soft);
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
-  padding: 12px 20px;
+  padding: 10px 16px;
   margin-bottom: -1px;
   font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  line-height: 1.4;
   cursor: pointer;
   display: inline-flex;
-  align-items: baseline;
-  gap: 10px;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.12s ease, border-color 0.12s ease;
 }
-.tab::before { display: none; }
-.tab:hover {
-  color: var(--text);
-  transform: none;
-}
-.tab--active {
+.se-tab::before { display: none; content: none; }
+.se-tab:hover { color: var(--text); transform: none; background: transparent; }
+.se-tab--active {
   color: var(--text);
   border-bottom-color: var(--accent);
 }
-.tab-hint {
-  font-size: 10px;
+.se-tab__count {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+
+/* ─── Form ─────────────────────────────────────────────────────── */
+.se-form {
+  padding-top: 8px;
+}
+.se-field {
+  display: block;
+  margin-top: 22px;
+}
+.se-field__label {
+  display: block;
+  margin: 0 0 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+.se-field__label-tag {
   font-weight: 400;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.06em;
   text-transform: none;
   color: var(--muted);
+  margin-left: 6px;
+}
+.se-field__input {
+  width: 100%;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 9px 12px;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.se-field__input:focus {
+  border-color: var(--accent);
+}
+.se-field__input::placeholder { color: var(--muted); }
+.se-field__readonly {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text);
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border: 1px dashed var(--border);
+}
+.se-field__hint {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  line-height: 1.55;
+}
+.se-field__textarea {
+  width: 100%;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 10px 12px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  outline: none;
+  resize: vertical;
+  min-height: 0;
+  transition: border-color 0.15s ease;
+}
+.se-field__textarea:focus { border-color: var(--accent); }
+.se-field__textarea--code {
+  font-size: 12.5px;
+  white-space: pre;
+}
+.se-field__editor {
+  /* Wrapper around MarkdownEditor — no styles needed, editor brings its own. */
 }
 
-.empty-state {
-  text-align: center;
-  padding: 48px 32px;
+/* Collapse panel for extra frontmatter — matches audit/history bar */
+.se-field--collapse {
+  margin-top: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
-.empty-state h2 { margin-bottom: 8px; }
-
-.skill-editor {
-  display: grid;
-  grid-template-columns: minmax(240px, 280px) 1fr;
-  gap: 24px;
-  margin-bottom: 24px;
-  align-items: start;
-}
-@media (max-width: 880px) {
-  .skill-editor {
-    grid-template-columns: 1fr;
-  }
-}
-
-.file-tree {
-  position: sticky;
-  top: 96px;
-  padding: 22px 22px;
-}
-@media (max-width: 880px) {
-  .file-tree { position: static; }
-}
-
-.tree-item {
+.se-field__summary {
+  list-style: none;
+  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  user-select: none;
+}
+.se-field__summary::-webkit-details-marker { display: none; }
+.se-field__toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  flex: 0 0 auto;
+  transition: border-color 0.15s ease;
+}
+.se-field--collapse:not([open]) > .se-field__summary .se-field__toggle::before { content: '+'; }
+.se-field--collapse[open] > .se-field__summary .se-field__toggle::before { content: '−'; }
+.se-field__summary-label { letter-spacing: inherit; flex: 0 0 auto; }
+.se-field__summary-tag {
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  color: var(--muted);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.se-field__summary-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.se-field__summary-hint-open,
+.se-field__summary-hint-close { display: none; }
+.se-field--collapse:not([open]) > .se-field__summary .se-field__summary-hint-open { display: inline; }
+.se-field--collapse[open] > .se-field__summary .se-field__summary-hint-close { display: inline; }
+.se-field__summary-chev {
+  display: inline-block;
+  color: var(--accent);
+  font-size: 12px;
+  transition: transform 0.18s ease;
+  letter-spacing: 0;
+}
+.se-field--collapse[open] > .se-field__summary .se-field__summary-chev { transform: rotate(90deg); }
+.se-field__summary:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(245, 165, 36, 0.04);
+}
+.se-field__summary:hover .se-field__toggle { border-color: var(--accent); }
+.se-field__summary:hover .se-field__summary-hint { color: var(--text-soft); }
+.se-field--collapse[open] > .se-field__summary {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.se-field__collapse-body {
+  padding: 12px 14px 4px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.se-form__foot {
+  margin: 22px 0 0;
+  padding: 10px 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+  border-left: 2px solid var(--border);
+  background: var(--bg-2);
+}
+
+/* ─── Files tab (split pane) ───────────────────────────────────── */
+.se-files {
+  display: grid;
+  grid-template-columns: minmax(260px, 300px) 1fr;
+  gap: 0;
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  min-height: 480px;
+}
+@media (max-width: 880px) {
+  .se-files { grid-template-columns: 1fr; }
+}
+
+.se-tree {
+  border-right: 1px solid var(--border);
+  padding: 14px 16px;
+  background: var(--bg);
+}
+@media (max-width: 880px) {
+  .se-tree { border-right: 0; border-bottom: 1px solid var(--border); }
+}
+.se-tree__intro {
+  margin: 0 0 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.se-tree__group {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+.se-tree__group:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.se-tree__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.se-tree__name {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.se-tree__count {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.se-tree__act {
+  background: transparent;
+  border: 0;
+  color: var(--text-soft);
+  padding: 2px 6px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: color 0.12s ease;
+}
+.se-tree__act::before { display: none; content: none; }
+.se-tree__act:hover { color: var(--accent); background: transparent; transform: none; }
+.se-tree__hint {
+  margin: 0 0 6px;
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.se-tree__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.se-tree__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   background: transparent;
   color: var(--text-soft);
   border: 0;
-  border-left: 2px solid transparent;
-  padding: 8px 10px;
+  border-radius: 0;
+  padding: 5px 8px;
   margin: 0;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
   letter-spacing: 0;
   text-transform: none;
   font-weight: 500;
   cursor: pointer;
   text-align: left;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: color 0.1s ease, background 0.1s ease;
 }
-.tree-item::before { display: none; }
-.tree-item:hover {
+.se-tree__item::before { display: none; content: none; }
+.se-tree__item:hover {
   color: var(--text);
   background: rgba(255, 255, 255, 0.025);
   transform: none;
 }
-.tree-item--active {
-  color: var(--text);
-  border-left-color: var(--accent);
-  background: rgba(245, 165, 36, 0.06);
+.se-tree__item--active,
+.se-tree__item--active:hover {
+  color: var(--bg);
+  background: var(--accent);
 }
-.tree-item-name { flex: 1; min-width: 0; word-break: break-all; }
-.tree-item-meta { font-size: 10.5px; flex: 0 0 auto; }
-.tree-item-badge {
-  font-size: 9.5px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--accent-2);
-  border: 1px solid var(--border);
-  padding: 1px 6px;
-  border-radius: 999px;
+.se-tree__item--active .se-tree__item-meta,
+.se-tree__item--active .se-tree__chev {
+  color: var(--bg);
+}
+.se-tree__chev {
   flex: 0 0 auto;
+  color: var(--muted);
+  width: 10px;
+  text-align: center;
 }
-
-.tree-folder {
-  margin-top: 18px;
-  border-top: 1px solid var(--border-soft);
-  padding-top: 12px;
+.se-tree__item-name {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
 }
-.tree-folder-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  margin-bottom: 4px;
-}
-.tree-folder-name {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--text);
-}
-.tree-folder-hint {
-  font-size: 11px;
-  margin: 0 10px 6px;
-}
-.iconbtn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-soft);
-  padding: 4px 8px;
-  font-family: var(--mono);
+.se-tree__item-meta {
   font-size: 10px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  color: var(--muted);
+  flex: 0 0 auto;
+  letter-spacing: 0;
 }
-.iconbtn::before { display: none; }
-.iconbtn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  transform: none;
+.se-tree__empty {
+  padding: 4px 8px 4px 18px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-style: normal;
+  color: var(--muted);
 }
 
-.tree-list {
-  list-style: none;
+/* ─── Editor pane ──────────────────────────────────────────────── */
+.se-pane {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  min-width: 0;
+}
+.se-pane__empty {
+  margin: auto;
+  padding: 40px 16px;
+  text-align: center;
+}
+.se-pane__empty-title {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 6px;
+  letter-spacing: 0.04em;
+}
+.se-pane__empty-hint {
   margin: 0;
-  padding: 0;
+  font-size: 12px;
+  color: var(--muted);
 }
-.tree-empty {
-  padding: 6px 12px;
-  font-size: 11px;
-  font-style: italic;
-}
-
-.editor-pane > .card { margin-bottom: 0; }
-
-.collapsible-card > summary {
-  cursor: pointer;
-  list-style: none;
+.se-pane__head {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 12px;
 }
-.collapsible-card > summary::-webkit-details-marker { display: none; }
-.collapsible-card > summary::before {
-  content: '▸';
-  display: inline-block;
+.se-pane__path {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--text);
+}
+.se-pane__meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.se-pane__loading {
+  margin: 8px 0 0;
   font-size: 12px;
-  color: var(--text-soft);
-  transition: transform 0.15s ease;
+  color: var(--muted);
 }
-.collapsible-card[open] > summary::before { transform: rotate(90deg); }
-.collapsible-card > summary > h2 {
+.se-pane__editor {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 12px 14px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  outline: none;
+  resize: vertical;
+  min-height: 360px;
+}
+.se-pane__editor:focus { border-color: var(--accent); }
+.se-pane__binary {
   margin: 0;
-  display: inline;
+  padding: 14px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px dashed var(--border);
 }
-.collapsible-card[open] > summary { margin-bottom: 16px; }
+.se-pane__actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ─── Section (review) ─────────────────────────────────────────── */
+.se-section {
+  margin-top: 28px;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--border);
+}
+.se-section__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.se-section__title {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.se-section__loading {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.se-review__summary {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text);
+  margin: 4px 0 12px;
+}
+.se-review__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.se-review__pass {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--success);
+  letter-spacing: 0.04em;
+}
+
+.se-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: lowercase;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+.se-tag--problem {
+  color: var(--rust);
+  border-color: var(--rust);
+}
+.se-tag--warning {
+  color: var(--accent-2);
+  border-color: var(--accent);
+}
+.se-tag--info {
+  color: var(--text-soft);
+  border-color: var(--border);
+}
+
+.se-findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.se-finding {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  background: var(--bg-2);
+  padding: 10px 12px;
+}
+.se-finding--problem { border-left-color: var(--rust); }
+.se-finding--warning { border-left-color: var(--accent); }
+.se-finding--info    { border-left-color: var(--border); }
+.se-finding__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.se-finding__sev {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--muted);
+}
+.se-finding--problem .se-finding__sev { color: var(--rust); }
+.se-finding--warning .se-finding__sev { color: var(--accent-2); }
+.se-finding__title {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.se-finding__detail {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.se-suggest {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--accent);
+  background: rgba(245, 165, 36, 0.04);
+}
+.se-suggest__body { flex: 1; min-width: 0; }
+.se-suggest__label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  margin-bottom: 4px;
+}
+.se-suggest__text {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* ─── Disclosure (audit) ───────────────────────────────────────── */
+.se-disclosure {
+  margin-top: 22px;
+}
+.se-disclosure__head {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  user-select: none;
+}
+.se-disclosure__head::-webkit-details-marker { display: none; }
+.se-disclosure__toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  flex: 0 0 auto;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.se-disclosure[open] > .se-disclosure__head .se-disclosure__toggle::before {
+  content: '−';
+}
+.se-disclosure:not([open]) > .se-disclosure__head .se-disclosure__toggle::before {
+  content: '+';
+}
+.se-disclosure__title { letter-spacing: inherit; flex: 0 0 auto; }
+.se-disclosure__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.se-disclosure__hint-open,
+.se-disclosure__hint-close { display: none; }
+.se-disclosure:not([open]) > .se-disclosure__head .se-disclosure__hint-open { display: inline; }
+.se-disclosure[open] > .se-disclosure__head .se-disclosure__hint-close { display: inline; }
+.se-disclosure__chev {
+  display: inline-block;
+  color: var(--accent);
+  font-size: 12px;
+  transition: transform 0.18s ease;
+  letter-spacing: 0;
+}
+.se-disclosure[open] > .se-disclosure__head .se-disclosure__chev { transform: rotate(90deg); }
+.se-disclosure__head:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(245, 165, 36, 0.04);
+}
+.se-disclosure__head:hover .se-disclosure__toggle {
+  border-color: var(--accent);
+}
+.se-disclosure__head:hover .se-disclosure__hint {
+  color: var(--text-soft);
+}
+.se-disclosure[open] > .se-disclosure__head {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.se-audit {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.se-audit dt {
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.se-audit dd {
+  margin: 0;
+  color: var(--text);
+}
+.se-audit__dim { color: var(--muted); }
+
+/* Small screens */
+@media (max-width: 720px) {
+  .se-bar { padding: 12px; gap: 10px; }
+  .se-bar__actions { gap: 4px; }
+  .se-btn { padding: 5px 10px; font-size: 11px; }
+}
 </style>
