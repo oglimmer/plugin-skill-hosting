@@ -1,0 +1,26 @@
+name: Cleanup container images
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    name: Delete untagged image versions
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - plugin-skill-hosting-backend
+          - plugin-skill-hosting-frontend
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: container
+          delete-only-untagged-versions: 'true'
+          min-versions-to-keep: 0
