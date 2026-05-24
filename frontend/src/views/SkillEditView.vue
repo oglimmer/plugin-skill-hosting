@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { api, errMsg } from '../api'
 import type { ValidationReport, FindingSeverity } from '../types'
 import { useConfirm } from '../composables/useConfirm'
@@ -101,6 +101,7 @@ const findingCounts = computed(() => {
 function applySuggestedDescription() {
   if (validationReport.value?.suggestedDescription) {
     description.value = validationReport.value.suggestedDescription
+    markTouched()
   }
 }
 const audit = ref<{
@@ -109,6 +110,44 @@ const audit = ref<{
   updatedByName?: string
   updatedAt?: string
 }>({})
+
+// Pristine snapshot of the editable fields. Updated whenever the form's
+// contents match what's persisted on the server (initial load, after save,
+// after revert) so isDirty correctly flips back to false.
+const pristine = ref({
+  description: '',
+  body: defaultBody(),
+  extraFrontmatter: '',
+})
+
+// Set true on any real user input event. The MarkdownEditor (Crepe) emits
+// `update:modelValue` for its own post-mount normalization, not just for
+// typing — so we can't rely on `body !== pristine.body` alone. A keyboard
+// or input event from the user is the authoritative dirty signal.
+const userTouched = ref(false)
+function markTouched() { userTouched.value = true }
+
+function snapshotPristine() {
+  pristine.value = {
+    description: description.value,
+    body: body.value,
+    extraFrontmatter: extraFrontmatter.value,
+  }
+  userTouched.value = false
+}
+
+const isDirty = computed(() => {
+  if (fileDirty.value) return true
+  if (!userTouched.value) return false
+  return description.value !== pristine.value.description
+    || body.value !== pristine.value.body
+    || extraFrontmatter.value !== pristine.value.extraFrontmatter
+})
+
+// Set true just before navigations the user explicitly initiated (Save,
+// Cancel, Import, …). The route guard checks this and skips the discard
+// prompt, since the action itself implies intent.
+let bypassGuard = false
 
 function defaultBody() {
   return `## Instructions
@@ -123,7 +162,10 @@ function fmt(d?: string | null) {
 }
 
 async function load() {
-  if (!isEdit.value) return
+  if (!isEdit.value) {
+    snapshotPristine()
+    return
+  }
   try {
     const p = await pluginStore.loadPlugin(props.pluginName)
     const s = p.skills?.find(s => s.name === props.skillName)
@@ -141,6 +183,7 @@ async function load() {
       updatedByName: s.updatedByName,
       updatedAt: s.updatedAt,
     }
+    snapshotPristine()
     await loadFiles()
   } catch (e: unknown) {
     error.value = errMsg(e)
@@ -160,6 +203,7 @@ async function onImportFile(ev: Event) {
   importing.value = true
   try {
     const s = await api.importSkill(props.pluginName, file)
+    bypassGuard = true
     router.push(`/plugins/${props.pluginName}/skills/${s.name}/edit`)
   } catch (e: unknown) {
     error.value = errMsg(e)
@@ -186,12 +230,21 @@ async function submit() {
         extraFrontmatter: extraFrontmatter.value,
       })
     }
+    bypassGuard = true
     router.push(`/plugins/${props.pluginName}`)
   } catch (e: unknown) {
     error.value = errMsg(e)
   } finally {
     loading.value = false
   }
+}
+
+function cancel() {
+  // Cancel is an explicit, intentional discard — skip the unsaved-changes
+  // prompt for it. The route guard only fires for accidental leaves
+  // (breadcrumb, browser back, etc.).
+  bypassGuard = true
+  router.push(`/plugins/${props.pluginName}`)
 }
 
 async function validate() {
@@ -232,12 +285,39 @@ async function revert(version: number) {
       updatedAt: s.updatedAt,
     }
     await Promise.all([versionHistory.value?.reload(), refreshAfterRevert()])
+    snapshotPristine()
   } catch (e: unknown) {
     error.value = errMsg(e)
   }
 }
 
-onMounted(load)
+onBeforeRouteLeave(async () => {
+  if (bypassGuard) {
+    bypassGuard = false
+    return true
+  }
+  if (!isDirty.value) return true
+  return await confirm({
+    title: 'Discard unsaved changes?',
+    message: 'You have unsaved changes to this skill. Leave this page and lose them?',
+    confirmLabel: 'Discard',
+    cancelLabel: 'Stay',
+    danger: true,
+  })
+})
+
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (!isDirty.value) return
+  e.preventDefault()
+  // Some browsers still require a returnValue to trigger the native prompt.
+  e.returnValue = ''
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', onBeforeUnload)
+  load()
+})
+onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload))
 // Same component backs /skills/new and /skills/:name/edit, so a route change
 // (e.g. just after import) reuses the instance and skips onMounted — reload
 // explicitly when the target skill name changes.
@@ -280,7 +360,13 @@ watch(() => props.skillName, load)
       />
 
       <label>Description (used by Claude to decide when to use this skill)</label>
-      <textarea v-model="description" required rows="6" class="description-textarea" />
+      <textarea
+        v-model="description"
+        required
+        rows="6"
+        class="description-textarea"
+        @input="markTouched"
+      />
 
       <details class="extra-frontmatter" :open="!!extraFrontmatter">
         <summary>Extra YAML frontmatter (advanced)</summary>
@@ -296,11 +382,14 @@ watch(() => props.skillName, load)
           class="extra-frontmatter-textarea"
           spellcheck="false"
           placeholder="allowed-tools:&#10;  - Read&#10;  - Edit"
+          @input="markTouched"
         />
       </details>
 
       <label>Body (Markdown — becomes the contents of SKILL.md after the frontmatter)</label>
-      <MarkdownEditor v-model="body" />
+      <div @input="markTouched" @keydown="markTouched">
+        <MarkdownEditor v-model="body" />
+      </div>
 
       <ErrorAlert :message="error" />
       <div class="row" style="margin-top: 16px; gap: 8px; flex-wrap: wrap">
@@ -315,7 +404,7 @@ watch(() => props.skillName, load)
         >
           {{ validating ? 'Validating…' : 'Validate' }}
         </button>
-        <RouterLink :to="`/plugins/${pluginName}`" class="btn secondary">Cancel</RouterLink>
+        <button type="button" class="secondary" @click="cancel">Cancel</button>
       </div>
       <p class="muted" style="margin-top: 12px">
         Supporting files (scripts/, references/, assets/) can be added after the skill is created.
@@ -380,7 +469,13 @@ watch(() => props.skillName, load)
         />
 
         <label>Description (used by Claude to decide when to use this skill)</label>
-        <textarea v-model="description" required rows="6" class="description-textarea" />
+        <textarea
+          v-model="description"
+          required
+          rows="6"
+          class="description-textarea"
+          @input="markTouched"
+        />
 
         <details class="extra-frontmatter" :open="!!extraFrontmatter">
           <summary>Extra YAML frontmatter (advanced)</summary>
@@ -395,11 +490,14 @@ watch(() => props.skillName, load)
             class="extra-frontmatter-textarea"
             spellcheck="false"
             placeholder="allowed-tools:&#10;  - Read&#10;  - Edit"
+            @input="markTouched"
           />
         </details>
 
         <label>Body (Markdown — becomes the contents of SKILL.md after the frontmatter)</label>
-        <MarkdownEditor v-model="body" />
+        <div @input="markTouched" @keydown="markTouched">
+          <MarkdownEditor v-model="body" />
+        </div>
 
         <ErrorAlert :message="error" />
         <div class="row" style="margin-top: 16px; gap: 8px; flex-wrap: wrap">
@@ -414,7 +512,7 @@ watch(() => props.skillName, load)
           >
             {{ validating ? 'Validating…' : 'Validate' }}
           </button>
-          <RouterLink :to="`/plugins/${pluginName}`" class="btn secondary">Cancel</RouterLink>
+          <button type="button" class="secondary" @click="cancel">Cancel</button>
         </div>
       </form>
     </div>
