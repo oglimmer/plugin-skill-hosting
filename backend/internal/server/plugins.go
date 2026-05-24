@@ -23,6 +23,14 @@ type createPluginReq struct {
 	License     string `json:"license"`
 }
 
+type updatePluginReq struct {
+	Description string `json:"description"`
+	AuthorName  string `json:"authorName"`
+	AuthorEmail string `json:"authorEmail"`
+	Homepage    string `json:"homepage"`
+	License     string `json:"license"`
+}
+
 // pluginSelectColumns lists every column queryPlugins expects, including the
 // deleted-by user join used by the restore UI.
 const pluginSelectColumns = `p.id, p.owner_id, u.username, p.name, p.description, p.version,
@@ -226,6 +234,59 @@ func (a *App) handleCreatePlugin(w http.ResponseWriter, r *http.Request) {
 	}
 	metrics.PluginMutationsTotal.WithLabelValues("create", "success").Inc()
 	writeJSON(w, http.StatusOK, p)
+}
+
+// handleUpdatePlugin lets the owner change the editable metadata fields
+// (everything except name). The plugin's git repo is re-materialized so the
+// generated marketplace.json and README pick up the new values immediately.
+func (a *App) handleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	p := a.loadActivePluginOrRespond(w, r)
+	if p == nil {
+		return
+	}
+	if p.OwnerID != user.ID {
+		writeErr(w, http.StatusForbidden, "not your plugin")
+		return
+	}
+	var req updatePluginReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	req.Description = strings.TrimSpace(req.Description)
+	if req.Description == "" {
+		writeErr(w, http.StatusBadRequest, "description is required")
+		return
+	}
+	if _, err := a.DB.ExecContext(r.Context(), `
+		UPDATE plugins
+		   SET description = $1,
+		       author_name = $2, author_email = $3,
+		       homepage = $4, license = $5,
+		       updated_at = now()
+		 WHERE id = $6
+	`, req.Description, req.AuthorName, req.AuthorEmail, req.Homepage, req.License, p.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	updated, err := a.loadPluginByName(r.Context(), p.Name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if err := a.materializePlugin(r.Context(), updated); err != nil {
+		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
+		return
+	}
+	skills, err := a.loadSkillsForPlugin(r.Context(), updated.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	updated.Skills = skills
+	metrics.PluginMutationsTotal.WithLabelValues("update", "success").Inc()
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // handleDeletePlugin soft-deletes the plugin: the row stays in the database but

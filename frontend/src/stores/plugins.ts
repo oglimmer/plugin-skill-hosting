@@ -32,6 +32,13 @@ export const usePluginStore = defineStore('plugins', () => {
     return p
   }
 
+  async function updatePlugin(name: string, data: Partial<Plugin>) {
+    const p = await api.updatePlugin(name, data)
+    list.value = list.value.map(item => item.name === name ? p : item)
+    if (current.value?.name === name) current.value = p
+    return p
+  }
+
   async function deletePlugin(name: string) {
     await api.deletePlugin(name)
     list.value = list.value.filter(p => p.name !== name)
@@ -48,6 +55,6 @@ export const usePluginStore = defineStore('plugins', () => {
   return {
     list, deleted, current,
     loadList, loadDeleted, loadPlugin, refreshCurrent,
-    createPlugin, deletePlugin, restorePlugin,
+    createPlugin, updatePlugin, deletePlugin, restorePlugin,
   }
 })

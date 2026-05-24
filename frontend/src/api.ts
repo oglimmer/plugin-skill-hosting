@@ -64,6 +64,8 @@ export const api = {
   getPlugin: (name: string) => request<Plugin>(`/api/plugins/${name}`),
   createPlugin: (data: Partial<Plugin>) =>
     request<Plugin>('/api/plugins', { method: 'POST', body: JSON.stringify(data) }),
+  updatePlugin: (name: string, data: Partial<Plugin>) =>
+    request<Plugin>(`/api/plugins/${name}`, { method: 'PUT', body: JSON.stringify(data) }),
   deletePlugin: (name: string) =>
     request<void>(`/api/plugins/${name}`, { method: 'DELETE' }),
   listDeletedPlugins: () => request<Plugin[]>('/api/me/deleted-plugins'),

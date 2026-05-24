@@ -22,6 +22,17 @@ const error = ref('')
 const copied = ref('')
 const activeTab = ref<'skills' | 'connect'>('skills')
 
+const editing = ref(false)
+const saving = ref(false)
+const editError = ref('')
+const editForm = ref({
+  description: '',
+  authorName: '',
+  authorEmail: '',
+  homepage: '',
+  license: '',
+})
+
 const isOwner = computed(() =>
   !!(plugin.value && auth.user && plugin.value.ownerId === auth.user.id),
 )
@@ -72,6 +83,40 @@ async function restoreSkill(name: string) {
   }
 }
 
+function startEdit() {
+  if (!plugin.value) return
+  editForm.value = {
+    description: plugin.value.description ?? '',
+    authorName: plugin.value.authorName ?? '',
+    authorEmail: plugin.value.authorEmail ?? '',
+    homepage: plugin.value.homepage ?? '',
+    license: plugin.value.license ?? '',
+  }
+  editError.value = ''
+  editing.value = true
+  // Switch to the tab that holds the form so it isn't hidden.
+  activeTab.value = 'connect'
+}
+
+function cancelEdit() {
+  editing.value = false
+  editError.value = ''
+}
+
+async function saveEdit() {
+  if (!plugin.value) return
+  editError.value = ''
+  saving.value = true
+  try {
+    await pluginStore.updatePlugin(plugin.value.name, { ...editForm.value })
+    editing.value = false
+  } catch (e: unknown) {
+    editError.value = errMsg(e)
+  } finally {
+    saving.value = false
+  }
+}
+
 async function deletePlugin() {
   if (!plugin.value) return
   const ok = await confirm({
@@ -109,6 +154,12 @@ onMounted(() => {
         <span class="pd-bar__ver">v{{ plugin.version }}</span>
       </div>
       <div class="pd-bar__actions">
+        <button
+          v-if="isOwner && !editing"
+          type="button"
+          class="pd-btn"
+          @click="startEdit"
+        >edit metadata</button>
         <button
           v-if="isOwner"
           type="button"
@@ -251,8 +302,10 @@ onMounted(() => {
       <div class="pd-block">
         <header class="pd-block__head">
           <span class="pd-block__title">metadata</span>
+          <span v-if="editing" class="pd-block__editing">· editing</span>
         </header>
-        <dl class="pd-meta">
+
+        <dl v-if="!editing" class="pd-meta">
           <dt>owner</dt>
           <dd>{{ plugin.ownerName }}</dd>
           <template v-if="plugin.authorName">
@@ -274,6 +327,52 @@ onMounted(() => {
           <dt>updated</dt>
           <dd class="pd-meta__dim">{{ fmt(plugin.updatedAt) }}</dd>
         </dl>
+
+        <form v-else class="pd-form" @submit.prevent="saveEdit">
+          <p class="pd-form__readonly">
+            <span class="pd-form__readonly-label">name</span>
+            <code>{{ plugin.name }}</code>
+            <span class="pd-form__readonly-hint">slug is permanent — used in URLs and /plugin install</span>
+          </p>
+
+          <div class="pd-field">
+            <label class="pd-field__label">description</label>
+            <input v-model="editForm.description" class="pd-field__input" required />
+          </div>
+
+          <div class="pd-field">
+            <label class="pd-field__label">license</label>
+            <input v-model="editForm.license" class="pd-field__input" placeholder="MIT" />
+          </div>
+
+          <div class="pd-field-row">
+            <div class="pd-field">
+              <label class="pd-field__label">author name</label>
+              <input v-model="editForm.authorName" class="pd-field__input" />
+            </div>
+            <div class="pd-field">
+              <label class="pd-field__label">author email</label>
+              <input v-model="editForm.authorEmail" type="email" class="pd-field__input" />
+            </div>
+          </div>
+
+          <div class="pd-field">
+            <label class="pd-field__label">homepage</label>
+            <input v-model="editForm.homepage" type="url" class="pd-field__input" placeholder="https://example.com" />
+          </div>
+          <p class="pd-form__note">
+            version is managed automatically — it bumps as skills change.
+          </p>
+
+          <ErrorAlert :message="editError" />
+
+          <div class="pd-form__actions">
+            <button type="button" class="pd-btn" :disabled="saving" @click="cancelEdit">cancel</button>
+            <button type="submit" class="pd-btn pd-btn--primary" :disabled="saving">
+              {{ saving ? 'saving…' : 'save' }}
+            </button>
+          </div>
+        </form>
       </div>
     </section>
   </div>
@@ -720,6 +819,104 @@ onMounted(() => {
 }
 .pd-meta dd a:hover { color: var(--accent); }
 .pd-meta__dim { color: var(--muted); }
+
+/* ─── Edit form ────────────────────────────────────────────────── */
+.pd-block__editing {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  margin-left: 8px;
+}
+.pd-form { display: block; }
+.pd-form__readonly {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.pd-form__readonly-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pd-form__readonly code {
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px dashed var(--border);
+  padding: 2px 8px;
+}
+.pd-form__readonly-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+.pd-field {
+  display: block;
+  margin-top: 18px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.pd-field__label {
+  display: block;
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+.pd-field__input {
+  width: 100%;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.pd-field__input:focus { border-color: var(--accent); }
+.pd-field__input::placeholder { color: var(--muted); }
+.pd-field__hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.pd-field-row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 0;
+}
+.pd-form__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 18px;
+}
+.pd-form__note {
+  margin: 16px 0 0;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--bg-2);
+  border-left: 2px solid var(--border);
+  line-height: 1.5;
+}
+@media (max-width: 720px) {
+  .pd-field-row { gap: 8px; }
+}
 
 @media (max-width: 720px) {
   .pd-bar { padding: 12px; }

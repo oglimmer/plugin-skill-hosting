@@ -57,7 +57,7 @@ var (
 	PluginMutationsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "psh_plugin_mutations_total",
-			Help: "Plugin mutation count by action (create|delete|restore) and result.",
+			Help: "Plugin mutation count by action (create|update|delete|restore) and result.",
 		},
 		[]string{"action", "result"},
 	)
