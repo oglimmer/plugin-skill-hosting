@@ -57,7 +57,7 @@ describe('SkillVersionHistory', () => {
     render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: 'my-skill' },
     })
-    expect(await screen.findByText('No history yet.')).toBeInTheDocument()
+    expect(await screen.findByText('no history yet.')).toBeInTheDocument()
   })
 
   it('shows an error when the API rejects', async () => {
@@ -84,7 +84,7 @@ describe('SkillVersionHistory', () => {
     const { emitted } = render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: 'my-skill' },
     })
-    await user.click(await screen.findByRole('button', { name: 'Revert' }))
+    await user.click(await screen.findByRole('button', { name: /revert/i }))
     expect(emitted().revert).toEqual([[3]])
   })
 
@@ -96,7 +96,7 @@ describe('SkillVersionHistory', () => {
       props: { pluginName: 'demo', skillName: 'my-skill' },
     })
     await screen.findByText('delete')
-    expect(screen.queryByRole('button', { name: 'Revert' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /revert/i })).toBeNull()
   })
 
   it('reloads when skillName prop changes', async () => {
