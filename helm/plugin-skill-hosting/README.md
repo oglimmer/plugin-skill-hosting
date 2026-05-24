@@ -56,6 +56,63 @@ helm upgrade --install plugin-skill-hosting . \
 
 > **Not deployed by the chart** — the application `Secret` carrying `JWT_SECRET`, `POSTGRES_PASSWORD` (or `DATABASE_URL`), and the optional `ANTHROPIC_API_KEY`, `OIDC_CLIENT_SECRET`, and `METRICS_TOKEN`. Supply your own (plain `Secret`, `SealedSecret`, ExternalSecrets, …) — see [§Sealed secret](#sealed-secret).
 
+## Decisions you must make before installing
+
+The chart's `values.yaml` reflects the maintainer's production setup. Before installing in your own cluster, work through these five choices — every install touches all of them.
+
+### 1. Authentication mode (`auth.mode`)
+
+| Mode | When to pick it | What you ship |
+| --- | --- | --- |
+| `password` | Solo or small team, no existing IdP. Users register with email + password; backend signs its own JWTs. | Nothing extra — just `JWT_SECRET` in the sealed secret. |
+| `oidc` | You already run an IdP (Keycloak, Auth0, Okta, Google, Azure AD, …). OIDC Authorization Code flow. | `auth.oidc.issuerURL` + `auth.oidc.clientID` in values; `OIDC_CLIENT_SECRET` in the sealed secret. |
+| `oidc` **+ Google Workspace allowlist** | Like `oidc` but limited to specific Google Workspace domains. | Same as `oidc`, plus `auth.oidc.googleWorkspaceDomains: [yourcompany.com, …]`. With a single domain the chart appends `hd=<domain>` to the auth URL so Google pre-filters the account chooser. The allowlist is only enforced when the issuer is Google — it's a no-op against other IdPs. |
+
+Switching modes later invalidates existing sessions but does not touch user records.
+
+### 2. Git-repo storage (`backend.persistence.enabled`)
+
+The backend keeps bare git repos and worktrees under `/data`. Two ways to back it:
+
+| Setting | Behaviour | Trade-off |
+| --- | --- | --- |
+| `true` (default), `rematerializeOnStartup: false` | A PVC is mounted at `/data`; repos survive restarts and upgrades. | Needs `ReadWriteOnce` storage. Forces `backend.replicaCount: 1` unless you switch the PVC to `ReadWriteMany`. |
+| `false`, `rematerializeOnStartup: true` | `/data` is an `emptyDir`; on every restart the backend rebuilds all repos from Postgres. | No PVC needed (handy for clusters without a storage class). Cold-start time grows with plugin count — usually a few seconds for small catalogues. Readiness probe holds traffic until rebuild finishes. |
+
+Postgres remains the source of truth either way. Full mechanics in [§Storage modes for git repos](#storage-modes-for-git-repos).
+
+### 3. Postgres — bundled or external (`postgres.enabled`)
+
+- `true` (default): the chart deploys a single-replica Postgres 16 with its own PVC. Set `postgres.user` / `postgres.database` / `postgres.persistence.size` to taste; put `POSTGRES_PASSWORD` in the sealed secret.
+- `false`: bring your own database (RDS, Cloud SQL, a managed Postgres next door, etc.). Ship the full DSN in the sealed secret as `DATABASE_URL=postgres://user:pass@host:5432/db?sslmode=require`. The chart's `postgres.*` block is ignored.
+
+There is no built-in migration path between the two — pick once before you start writing data.
+
+### 4. JWT and other secret material (sealed secret)
+
+The chart references but never creates the application `Secret`. Before the pods start you must put one in the namespace with at minimum:
+
+- **`JWT_SECRET`** — signs session JWTs. Generate once with `openssl rand -hex 32` and store it durably; rotating it invalidates every live session.
+- **`POSTGRES_PASSWORD`** (bundled DB) **or `DATABASE_URL`** (external DB) — pick the one that matches decision 3.
+
+And conditionally:
+
+- **`OIDC_CLIENT_SECRET`** — required when `auth.mode=oidc`.
+- **`ANTHROPIC_API_KEY`** — optional; enables server-side skill validation via `/api/skills/validate`.
+- **`METRICS_TOKEN`** — required when you take option B in decision 5.
+
+Sealing recipe and Argo CD layout in [§Sealed secret](#sealed-secret).
+
+### 5. Prometheus metrics (optional, `backend.metrics.*`)
+
+Three positions:
+
+- **Off** — `backend.metrics.enabled: false`. No `/metrics` annotations on the pod. Pick this if you don't run Prometheus.
+- **Cluster-internal scrape** (default) — `enabled: true`, `exposeOnIngress: false`. Adds `prometheus.io/scrape` annotations so a cluster-wide Prometheus picks `/metrics` off the in-cluster service. Nothing is exposed publicly; no token needed.
+- **Exposed on the public ingress** — also set `exposeOnIngress: true`. Routes `/metrics` through the ingress and requires `METRICS_TOKEN` in the sealed secret; the backend then rejects requests without `Authorization: Bearer <token>`. Pick this only when your scraper lives outside the cluster.
+
+Most installs stay on the default.
+
 ## Configure
 
 The minimum overrides for a real deployment:
