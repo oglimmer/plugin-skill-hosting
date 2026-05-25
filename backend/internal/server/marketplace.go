@@ -14,7 +14,14 @@ type marketplaceAuthor struct {
 
 type marketplaceSource struct {
 	Source string `json:"source"`
-	URL    string `json:"url"`
+	// URL is set for source="url"/"git"; omitted for source="github"/"gitlab".
+	URL string `json:"url,omitempty"`
+	// Repo / Path / Branch are set when Source is "github" or "gitlab" so
+	// Claude Code can resolve a plugin that lives in a subdirectory of a
+	// larger repo. Path is relative to the repo root.
+	Repo   string `json:"repo,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Branch string `json:"branch,omitempty"`
 }
 
 type marketplacePlugin struct {

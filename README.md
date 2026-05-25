@@ -194,6 +194,19 @@ curl -X POST -H "Authorization: Bearer $TOKEN" https://<your-host>/api/external-
 curl -X POST -H "Authorization: Bearer $TOKEN" https://<your-host>/api/external-git/sync-in  | jq
 ```
 
+### Using the external repo as a standalone marketplace
+
+If the external remote is hosted on **GitHub or GitLab**, the backend additionally writes a `.claude-plugin/marketplace.json` at the repo root on every push. The file lists every active plugin with a `github` (or `gitlab`) source pointing at its `plugins/<name>/` subdirectory, so the repo can be added to Claude Code directly without going through the marketplace server:
+
+```
+/plugin marketplace add https://github.com/<owner>/<repo>
+/plugin install <plugin-name>
+```
+
+For a **private** repo, Claude Code will need credentials with read access — same as cloning the repo locally. The PAT used by the backend for sync is server-side only; it isn't shared with Claude Code clients.
+
+For other git hosts (self-hosted Gitea, Bitbucket, raw `git+ssh`), no `marketplace.json` is generated — Claude Code's marketplace schema doesn't currently support a generic "git URL + subpath" source type. You can still use the repo as a backup/audit trail; just install plugins via the marketplace server's URL as before.
+
 ## Run locally with Docker Compose
 
 ```bash

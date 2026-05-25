@@ -34,15 +34,36 @@ type externalSync struct {
 	mu      sync.Mutex
 	cfg     config.Config
 	workDir string // local clone of the external repo
+
+	// rootWriter, when non-nil, is invoked on every push / delete (and at
+	// the end of an import that changed the plugin set) to re-render
+	// repo-root artefacts that depend on global state — currently the
+	// `.claude-plugin/marketplace.json` snapshot. App sets it during
+	// InitExternalSync so the external_sync.go layer stays DB-free.
+	rootWriter func(ctx context.Context) error
 }
 
 const externalSyncReadmePreamble = "# Marketplace mirror\n\n" +
-	"This repository is an automated, one-way mirror of a self-hosted Claude\n" +
-	"Code plugin marketplace. Each subdirectory under `plugins/` contains a\n" +
-	"materialised plugin: `.claude-plugin/plugin.json`, `skills/<name>/SKILL.md`\n" +
-	"and optional supporting files.\n\n" +
-	"Edits made here are not yet synced back. Treat this as a backup / audit\n" +
-	"log.\n"
+	"This repository is kept in sync with a self-hosted Claude Code plugin\n" +
+	"marketplace. Each subdirectory under `plugins/` contains a materialised\n" +
+	"plugin: `.claude-plugin/plugin.json`, `skills/<name>/SKILL.md` and optional\n" +
+	"supporting files under `scripts/`, `references/`, or `assets/`.\n\n" +
+	"## How sync works\n\n" +
+	"- **Outbound** (marketplace → here): every plugin create, update, or delete\n" +
+	"  in the marketplace UI / API / MCP rewrites the affected `plugins/<name>/`\n" +
+	"  subtree, commits as `marketplace <marketplace@local>`, and pushes.\n" +
+	"- **Inbound** (here → marketplace): a push webhook fires the marketplace\n" +
+	"  backend, which fetches the new commits and reconciles each changed\n" +
+	"  `plugins/<name>/` subtree into its database. Imported edits show up in\n" +
+	"  the skill's edit history attributed to the commit author (matched by\n" +
+	"  email to a marketplace user, or to the `external-git-sync` system user).\n\n" +
+	"## Editing\n\n" +
+	"You can edit `SKILL.md` files, the `plugin.json` manifest, or supporting\n" +
+	"files directly in this repo and `git push`. The webhook will import the\n" +
+	"change. **Conflict policy is remote-wins**: if a marketplace user edited\n" +
+	"the same skill between syncs, your push overwrites their version (the\n" +
+	"earlier state remains restorable from the skill's edit history).\n\n" +
+	"This README is regenerated on every sync; edits to it will be overwritten.\n"
 
 // newExternalSync constructs the syncer if the feature is enabled in cfg.
 // Returns (nil, nil) when disabled.
@@ -172,7 +193,7 @@ func (es *externalSync) pushPlugin(ctx context.Context, pluginName string, rende
 		if err := render(pluginDir); err != nil {
 			return fmt.Errorf("render plugin into external: %w", err)
 		}
-		if err := es.writeRootReadme(); err != nil {
+		if err := es.writeRootArtefacts(ctx); err != nil {
 			return err
 		}
 		return es.commitAndPush(fmt.Sprintf("Update plugin %s", pluginName))
@@ -241,6 +262,15 @@ func (es *externalSync) importFromRemote(ctx context.Context, reconcile func(ctx
 			log.Printf("external git import: plugin %q: %v", pluginName, err)
 		}
 	}
+	// Plugin set may have grown or shrunk — refresh marketplace.json so the
+	// external repo remains usable as a standalone marketplace. commitAndPush
+	// is a no-op when the rewrite produced no diff (steady state after a
+	// content-only edit).
+	if err := es.writeRootArtefacts(ctx); err != nil {
+		log.Printf("external git import: refresh root artefacts: %v", err)
+	} else if err := es.commitAndPush("Sync marketplace catalog"); err != nil {
+		log.Printf("external git import: push catalog refresh: %v", err)
+	}
 	return nil
 }
 
@@ -303,6 +333,11 @@ func (es *externalSync) bootstrapFromRemote(ctx context.Context, reconcile func(
 			continue
 		}
 		out = append(out, name)
+	}
+	if err := es.writeRootArtefacts(ctx); err != nil {
+		log.Printf("external git bootstrap: refresh root artefacts: %v", err)
+	} else if err := es.commitAndPush("Sync marketplace catalog"); err != nil {
+		log.Printf("external git bootstrap: push catalog refresh: %v", err)
 	}
 	return out, nil
 }
@@ -383,23 +418,43 @@ func shortSHA(sha string) string {
 }
 
 // deletePlugin removes plugins/<name>/ from the local clone, commits, and
-// pushes. No-op if the directory is already absent.
+// pushes. No-op if the directory is already absent AND no root artefact
+// needs refreshing.
 func (es *externalSync) deletePlugin(ctx context.Context, pluginName string) error {
 	es.mu.Lock()
 	defer es.mu.Unlock()
 	return es.withRetry(func() error {
 		pluginDir := filepath.Join(es.workDir, "plugins", pluginName)
 		if _, err := os.Stat(pluginDir); errors.Is(err, os.ErrNotExist) {
-			return nil
+			// Directory already gone, but marketplace.json may still list
+			// the plugin — re-render and commit if needed.
+			if err := es.writeRootArtefacts(ctx); err != nil {
+				return err
+			}
+			return es.commitAndPush(fmt.Sprintf("Remove plugin %s", pluginName))
 		}
 		if err := os.RemoveAll(pluginDir); err != nil {
 			return fmt.Errorf("remove external plugin dir: %w", err)
 		}
-		if err := es.writeRootReadme(); err != nil {
+		if err := es.writeRootArtefacts(ctx); err != nil {
 			return err
 		}
 		return es.commitAndPush(fmt.Sprintf("Remove plugin %s", pluginName))
 	})
+}
+
+// writeRootArtefacts writes the root README and (when registered) lets the
+// App render `.claude-plugin/marketplace.json` from current DB state. Errors
+// from rootWriter are returned to the caller so a failed re-render aborts
+// the push rather than committing a stale catalog.
+func (es *externalSync) writeRootArtefacts(ctx context.Context) error {
+	if err := es.writeRootReadme(); err != nil {
+		return err
+	}
+	if es.rootWriter == nil {
+		return nil
+	}
+	return es.rootWriter(ctx)
 }
 
 // withRetry runs op, and if the resulting error looks like a push rejection
@@ -513,6 +568,9 @@ func (a *App) InitExternalSync(ctx context.Context) error {
 		}
 		log.Printf("WARN: %v — continuing with sync disabled for this process", err)
 		return nil
+	}
+	es.rootWriter = func(ctx context.Context) error {
+		return a.renderExternalMarketplaceJSON(ctx, es.workDir)
 	}
 	a.ExternalSync = es
 	log.Printf("external git sync: enabled, remote=%s branch=%s",
