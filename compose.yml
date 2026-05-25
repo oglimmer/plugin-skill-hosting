@@ -35,6 +35,18 @@ services:
       OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      # External git mirror (optional): when EXTERNAL_GIT_REMOTE_URL is set the
+      # marketplace is one-way mirrored to that single repo on every change.
+      EXTERNAL_GIT_REMOTE_URL: ${EXTERNAL_GIT_REMOTE_URL:-}
+      EXTERNAL_GIT_BRANCH: ${EXTERNAL_GIT_BRANCH:-main}
+      EXTERNAL_GIT_USERNAME: ${EXTERNAL_GIT_USERNAME:-x-access-token}
+      EXTERNAL_GIT_TOKEN: ${EXTERNAL_GIT_TOKEN:-}
+      EXTERNAL_GIT_AUTHOR_NAME: ${EXTERNAL_GIT_AUTHOR_NAME:-marketplace}
+      EXTERNAL_GIT_AUTHOR_EMAIL: ${EXTERNAL_GIT_AUTHOR_EMAIL:-marketplace@local}
+      EXTERNAL_GIT_REQUIRED: ${EXTERNAL_GIT_REQUIRED:-false}
+      # Enables POST /api/webhooks/git (GitHub HMAC-SHA256 or GitLab token).
+      # Empty disables the endpoint.
+      EXTERNAL_GIT_WEBHOOK_SECRET: ${EXTERNAL_GIT_WEBHOOK_SECRET:-}
     volumes:
       - repo_data:/data
     depends_on:

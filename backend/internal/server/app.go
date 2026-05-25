@@ -19,6 +19,11 @@ type App struct {
 	DB   *sql.DB
 	OIDC *oidcRuntime // populated only when Cfg.AuthMode == "oidc"
 
+	// ExternalSync mirrors marketplace state to a configured external git
+	// repo (GitHub/GitLab/…) on every materialize/delete. nil when the
+	// feature is disabled (Cfg.ExternalGitRemoteURL empty).
+	ExternalSync *externalSync
+
 	// ready gates the readiness probe. False while REMATERIALIZE_ON_STARTUP is
 	// running; true otherwise. Use MarkReady/IsReady to access it.
 	ready atomic.Bool

@@ -125,6 +125,34 @@ spec:
               key: METRICS_TOKEN
               optional: true
         {{- end }}
+        {{- if .Values.externalGit.remoteURL }}
+        - name: EXTERNAL_GIT_REMOTE_URL
+          value: {{ .Values.externalGit.remoteURL | quote }}
+        - name: EXTERNAL_GIT_BRANCH
+          value: {{ .Values.externalGit.branch | default "main" | quote }}
+        - name: EXTERNAL_GIT_USERNAME
+          value: {{ .Values.externalGit.username | default "x-access-token" | quote }}
+        - name: EXTERNAL_GIT_AUTHOR_NAME
+          value: {{ .Values.externalGit.authorName | default "marketplace" | quote }}
+        - name: EXTERNAL_GIT_AUTHOR_EMAIL
+          value: {{ .Values.externalGit.authorEmail | default "marketplace@local" | quote }}
+        {{- if .Values.externalGit.required }}
+        - name: EXTERNAL_GIT_REQUIRED
+          value: "true"
+        {{- end }}
+        - name: EXTERNAL_GIT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "psh.secretName" . }}
+              key: EXTERNAL_GIT_TOKEN
+              optional: true
+        - name: EXTERNAL_GIT_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "psh.secretName" . }}
+              key: EXTERNAL_GIT_WEBHOOK_SECRET
+              optional: true
+        {{- end }}
         volumeMounts:
         - name: data
           mountPath: /data

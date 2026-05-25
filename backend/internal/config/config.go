@@ -44,6 +44,28 @@ type Config struct {
 	// database in a background goroutine after the server starts. Use this
 	// when the data dir is ephemeral (emptyDir / no PVC).
 	RematerializeOnStartup bool
+
+	// ExternalGitRemoteURL, when non-empty, enables one-way sync of the whole
+	// marketplace to a single external git repository (GitHub, GitLab, etc.).
+	// On every plugin materialize or delete the backend rewrites the
+	// plugins/<name>/ subtree in a checked-out clone of this remote, commits,
+	// and pushes. Internal per-plugin repos under /data/repos/ are unaffected.
+	ExternalGitRemoteURL   string
+	ExternalGitBranch      string
+	ExternalGitUsername    string
+	ExternalGitToken       string
+	ExternalGitAuthorName  string
+	ExternalGitAuthorEmail string
+	// ExternalGitRequired, when true, makes external-push failures fail the
+	// internal materialize too. Default false: push failures log a WARN and
+	// internal writes still succeed.
+	ExternalGitRequired bool
+
+	// ExternalGitWebhookSecret enables POST /api/webhooks/git. GitHub pushes
+	// are authenticated by HMAC-SHA256 of the body under this secret
+	// (X-Hub-Signature-256); GitLab pushes compare X-Gitlab-Token verbatim.
+	// Empty disables the endpoint with HTTP 503.
+	ExternalGitWebhookSecret string
 }
 
 // RequiresUserApproval reports whether new users must be approved by an
@@ -82,6 +104,18 @@ func Load() Config {
 		MetricsToken: getenv("METRICS_TOKEN", ""),
 
 		RematerializeOnStartup: os.Getenv("REMATERIALIZE_ON_STARTUP") == "true",
+
+		ExternalGitRemoteURL:     strings.TrimSpace(getenv("EXTERNAL_GIT_REMOTE_URL", "")),
+		ExternalGitBranch:        strings.TrimSpace(getenv("EXTERNAL_GIT_BRANCH", "main")),
+		ExternalGitUsername:      getenv("EXTERNAL_GIT_USERNAME", "x-access-token"),
+		ExternalGitToken:         getenv("EXTERNAL_GIT_TOKEN", ""),
+		ExternalGitAuthorName:    getenv("EXTERNAL_GIT_AUTHOR_NAME", "marketplace"),
+		ExternalGitAuthorEmail:   getenv("EXTERNAL_GIT_AUTHOR_EMAIL", "marketplace@local"),
+		ExternalGitRequired:      os.Getenv("EXTERNAL_GIT_REQUIRED") == "true",
+		ExternalGitWebhookSecret: getenv("EXTERNAL_GIT_WEBHOOK_SECRET", ""),
+	}
+	if c.ExternalGitBranch == "" {
+		c.ExternalGitBranch = "main"
 	}
 	if c.AuthMode != "password" && c.AuthMode != "oidc" {
 		log.Fatalf("AUTH_MODE must be 'password' or 'oidc', got %q", c.AuthMode)

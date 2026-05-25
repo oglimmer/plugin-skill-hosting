@@ -100,6 +100,8 @@ And conditionally:
 - **`OIDC_CLIENT_SECRET`** — required when `auth.mode=oidc`.
 - **`ANTHROPIC_API_KEY`** — optional; enables server-side skill validation via `/api/skills/validate`.
 - **`METRICS_TOKEN`** — required when you take option B in decision 5.
+- **`EXTERNAL_GIT_TOKEN`** — required when `externalGit.remoteURL` is an HTTPS URL (see decision 6).
+- **`EXTERNAL_GIT_WEBHOOK_SECRET`** — enables `POST /api/webhooks/git` so GitHub/GitLab can notify the backend on external pushes (see decision 6).
 
 Sealing recipe and Argo CD layout in [§Sealed secret](#sealed-secret).
 
@@ -112,6 +114,24 @@ Three positions:
 - **Exposed on the public ingress** — also set `exposeOnIngress: true`. Routes `/metrics` through the ingress and requires `METRICS_TOKEN` in the sealed secret; the backend then rejects requests without `Authorization: Bearer <token>`. Pick this only when your scraper lives outside the cluster.
 
 Most installs stay on the default.
+
+### 6. External git mirror (optional, `externalGit.*`)
+
+When `externalGit.remoteURL` is non-empty the backend one-way mirrors the marketplace to that single git repo on every plugin write — each plugin lands at `plugins/<name>/`, alongside a generated `README.md`. Treat it as a backup or audit log; edits made directly on the external repo are not yet synced back. See the top-level README's [External git mirror](../../README.md#external-git-mirror-optional) section for the full behaviour matrix.
+
+```yaml
+externalGit:
+  remoteURL: "https://github.com/your-org/marketplace-mirror.git"
+  branch: main
+  # username defaults to x-access-token (GitHub PAT) — use "oauth2" for GitLab.
+  required: false  # set true to fail materialize when external push fails
+```
+
+Then add `EXTERNAL_GIT_TOKEN` to the sealed secret. For SSH remotes (`git@…`) the chart does not currently mount an SSH key — use HTTPS + PAT for now.
+
+For inbound notifications (so edits made directly on the external repo flow back into the database), add `EXTERNAL_GIT_WEBHOOK_SECRET` to the same sealed secret and register `https://<your-host>/api/webhooks/git` as a push webhook in your forge. Configuration:
+- **GitHub**: `Content type: application/json`, `Secret: <EXTERNAL_GIT_WEBHOOK_SECRET>`, just the **push** event.
+- **GitLab**: `URL: https://<your-host>/api/webhooks/git`, `Secret token: <EXTERNAL_GIT_WEBHOOK_SECRET>`, trigger only on **Push events**.
 
 ## Configure
 

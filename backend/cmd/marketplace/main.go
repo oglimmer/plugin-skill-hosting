@@ -40,6 +40,10 @@ func main() {
 
 	app := &server.App{Cfg: cfg, DB: pool}
 
+	if err := app.InitExternalSync(context.Background()); err != nil {
+		log.Fatalf("external git sync init: %v", err)
+	}
+
 	if cfg.RematerializeOnStartup {
 		go app.RematerializeAll(context.Background())
 	} else {

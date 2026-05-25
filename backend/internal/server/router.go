@@ -58,6 +58,10 @@ func NewRouter(app *App) http.Handler {
 		r.Get("/version", app.handleVersion)
 		r.Get("/auth/config", app.handleAuthConfig)
 
+		// Git provider webhooks: HMAC-authenticated, no Bearer token.
+		// Lives under /api so the same ingress rules cover it.
+		r.Post("/webhooks/git", app.handleGitWebhook)
+
 		switch app.Cfg.AuthMode {
 		case "password":
 			r.Post("/auth/register", app.handleRegister)
@@ -86,6 +90,10 @@ func NewRouter(app *App) http.Handler {
 					r.Post("/users/{id}/promote", app.handlePromoteUser)
 					r.Post("/users/{id}/demote", app.handleDemoteUser)
 					r.Delete("/users/{id}", app.handleDeleteUser)
+					// One-shot bootstrap endpoints for bringing DB and the
+					// external git repo into initial alignment.
+					r.Post("/external-git/sync-out", app.handleAdminSyncOut)
+					r.Post("/external-git/sync-in", app.handleAdminSyncIn)
 				})
 				r.Get("/plugins", app.handleListPlugins)
 				r.Get("/plugins/{name}", app.handleGetPlugin)

@@ -13,6 +13,8 @@
 #   - ANTHROPIC_API_KEY          (enables /api/skills/validate)
 #   - OIDC_CLIENT_SECRET         (when auth.mode=oidc)
 #   - METRICS_TOKEN              (when backend.metrics.exposeOnIngress=true)
+#   - EXTERNAL_GIT_TOKEN         (when externalGit.enabled=true with an HTTPS remote)
+#   - EXTERNAL_GIT_WEBHOOK_SECRET (enables /api/webhooks/git inbound sync)
 existingSecret: ""
 
 # Public URL (must be HTTPS — Claude Code rejects http:// plugin sources).
@@ -107,6 +109,22 @@ backend:
     requests:
       cpu: 100m
       memory: 128Mi
+
+# Optional one-way mirror of the whole marketplace to a single external git
+# repository (GitHub, GitLab, …). Disabled when remoteURL is empty. The
+# external repo gets a `plugins/<name>/` subtree per plugin plus a generated
+# README; the token is read from the application Secret under
+# EXTERNAL_GIT_TOKEN. SSH remotes (git@…) don't need a token but the chart
+# does not currently mount an SSH key.
+externalGit:
+  remoteURL: "https://github.com/oglimmer/skill-sync.git"
+  branch: main
+  username: x-access-token
+  authorName: marketplace
+  authorEmail: marketplace@local
+  # When true, a failed external push fails the internal materialize too.
+  # Default false: failures log a WARN and internal writes still succeed.
+  required: false
 
 # Frontend (nginx serving the SPA) configuration
 frontend:
