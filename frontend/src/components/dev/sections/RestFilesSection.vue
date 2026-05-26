@@ -7,8 +7,10 @@ import Endpoint from '../Endpoint.vue'
     <header class="section-head">
       <h2>Skill file endpoints</h2>
       <p class="section-lede">
-        Skills can ship supporting files under three whitelisted top-level directories:
-        <code>scripts/</code>, <code>references/</code>, and <code>assets/</code>.
+        Skills can ship supporting files under any top-level folder whose name passes the
+        segment rules below. <code>scripts/</code>, <code>references/</code>, and
+        <code>assets/</code> are the conventional Anthropic-skill folders that the UI
+        surfaces by default, but the API accepts arbitrary folder names.
       </p>
     </header>
 
