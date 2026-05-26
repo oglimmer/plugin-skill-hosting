@@ -127,32 +127,23 @@ Behind a reverse proxy, the `/mcp` location needs response buffering off and lon
 
 ## External git mirror (optional)
 
-The whole marketplace can be two-way synced with a single git repo on GitHub, GitLab, or any other server that speaks git-over-HTTPS. Each plugin lands at `plugins/<name>/` in the external repo; everything else (per-plugin clone URLs served from `/git/...`, marketplace.json, the database) keeps working as before.
-
-Two halves, both optional and independent:
-
-1. **Outbound (push)** — set `EXTERNAL_GIT_REMOTE_URL` and `EXTERNAL_GIT_TOKEN`. Every plugin create / update / delete via the UI, API, or MCP gets force-pushed into the external repo with `marketplace` as the commit author.
-2. **Inbound (pull)** — additionally set `EXTERNAL_GIT_WEBHOOK_SECRET`, then register `https://<your-host>/api/webhooks/git` in your forge as a push webhook. Edits made directly on the external repo (a developer's `git push`) are then fetched and reconciled into Postgres. Each imported skill change shows up as a normal skill version in the UI history, attributed to the commit author (matched by email to an existing user, or the auto-created `external-git-sync` system user).
+The whole marketplace can be one-way mirrored to a single git repo on GitHub, GitLab, or any other server that speaks git-over-HTTPS. Each plugin lands at `plugins/<name>/` in the external repo; everything else (per-plugin clone URLs served from `/git/...`, marketplace.json, the database) keeps working as before. Sync is **outbound only**: edits made directly in the external repo are NOT pulled back into the marketplace and will be overwritten on the next push.
 
 Set on the backend container:
 
 | Var | Required | Default |
 | --- | --- | --- |
-| `EXTERNAL_GIT_REMOTE_URL` | yes (enables outbound) | — |
+| `EXTERNAL_GIT_REMOTE_URL` | yes (enables sync) | — |
 | `EXTERNAL_GIT_TOKEN` | yes for HTTPS remotes | — |
 | `EXTERNAL_GIT_BRANCH` | no | `main` |
 | `EXTERNAL_GIT_USERNAME` | no | `x-access-token` (GitHub PAT convention; use `oauth2` for GitLab) |
-| `EXTERNAL_GIT_AUTHOR_NAME` | no | `marketplace` |
-| `EXTERNAL_GIT_AUTHOR_EMAIL` | no | `marketplace@local` |
-| `EXTERNAL_GIT_REQUIRED` | no | `false` |
-| `EXTERNAL_GIT_WEBHOOK_SECRET` | yes (enables inbound) | — |
 
 Mechanics:
 
 - On startup the backend clones the remote into `/data/external/marketplace`. If the remote has no branch yet it initialises one with an initial commit.
-- Every plugin create / update / restore re-renders `plugins/<name>/` in the clone, commits, and pushes. Every plugin delete removes the subtree, commits, and pushes.
+- Every plugin create / update / restore re-renders `plugins/<name>/` in the clone, commits as `marketplace <marketplace@local>`, and pushes. Every plugin delete removes the subtree, commits, and pushes.
 - A single mutex serialises all external-repo operations, so concurrent edits can't race on the working tree.
-- Push rejections (remote moved between fetch and push) trigger one automatic refresh-and-retry. Other failures log a `WARN` and the internal materialize still succeeds — set `EXTERNAL_GIT_REQUIRED=true` to make external failures hard-fail instead.
+- Push rejections (remote moved between fetch and push) trigger one automatic refresh-and-retry. Other failures log a `WARN` and the internal materialize still succeeds — the database is the source of truth.
 - The configured token is embedded in the URL only for fetch/push; `git remote -v` and log output use the credential-free URL (and a regex scrubs anything that slips through).
 
 A GitHub-hosted mirror is the simplest case: create a private repo, generate a fine-grained PAT with `Contents: read & write` scoped to that repo, then point the backend at it:
@@ -165,33 +156,13 @@ docker compose up
 
 For GitLab, set `EXTERNAL_GIT_USERNAME=oauth2` and use a project or group access token.
 
-### Webhook setup
+### One-shot bootstrap
 
-Pick a random secret (`openssl rand -hex 32`), set it as `EXTERNAL_GIT_WEBHOOK_SECRET`, restart the backend, then:
-
-- **GitHub** — in the repo's Settings → Webhooks: `Payload URL = https://<your-host>/api/webhooks/git`, `Content type = application/json`, `Secret = <the secret>`, select **Just the push event**. The handler verifies `X-Hub-Signature-256` (HMAC-SHA256 of the raw body).
-- **GitLab** — in the project's Settings → Webhooks: `URL = https://<your-host>/api/webhooks/git`, `Secret token = <the secret>`, tick **Push events** only. The handler compares the `X-Gitlab-Token` header verbatim.
-
-Behaviour once a webhook arrives:
-
-- Signature / token verified; non-push events get `204 No Content`. Pushes to branches other than `EXTERNAL_GIT_BRANCH` also `204`.
-- The endpoint returns `202 Accepted` immediately; the actual fetch + DB reconcile runs in the background under the same mutex as outbound push.
-- For each changed `plugins/<name>/` subtree the backend upserts the plugin row, walks the `skills/` subdir, and inserts / updates / soft-deletes skills + supporting files to match what's on disk. Every skill change writes a `skill_versions` row attributed to the commit author. A subtree missing in the new tip soft-deletes the plugin.
-- Conflict policy: **remote wins**. If you edited a skill in the UI while someone else pushed an incompatible change directly, the imported state overwrites yours after the webhook fires. Earlier versions remain restorable from the skill's "Edit history".
-
-### One-shot bootstrap (initial alignment)
-
-The webhook only reacts to *changes* since the last seen commit, so it can't reconcile a populated DB with an empty external repo or vice versa on its own. Two admin-only endpoints handle the initial alignment:
-
-- **`POST /api/external-git/sync-out`** — re-materializes every active plugin in the DB, which pushes each one's `plugins/<name>/` subtree to the external repo. Use when the DB is populated and the external repo is empty or partial. Returns `{ "syncedPlugins": [...], "errors": {...} }`. Idempotent. Only touches plugins that exist in the DB; orphan subtrees in the external repo are left alone.
-- **`POST /api/external-git/sync-in`** — fetches the external branch and reconciles every plugin currently in `plugins/*` into the DB (insert / update via the same logic as the webhook). Use when external is populated and the DB is empty or partial. Returns `{ "reconciledPlugins": [...] }`. Idempotent. Only touches plugins that exist in the external tree; DB-only plugins are left alone.
-
-Both endpoints require an admin Bearer token, are serialised behind the same mutex as outbound push and the webhook, and can take a while for large catalogues — run them once after enabling the feature, not on every deploy.
+When you enable the feature on an already-populated marketplace, `POST /api/external-git/sync-out` re-materializes every active plugin in the DB, which pushes each one's `plugins/<name>/` subtree to the external repo. Use it once to seed the remote. Idempotent. Returns `{ "syncedPlugins": [...], "errors": {...} }`. Requires an admin Bearer token.
 
 ```bash
 TOKEN=<an admin's API token>
 curl -X POST -H "Authorization: Bearer $TOKEN" https://<your-host>/api/external-git/sync-out | jq
-curl -X POST -H "Authorization: Bearer $TOKEN" https://<your-host>/api/external-git/sync-in  | jq
 ```
 
 ### Using the external repo as a standalone marketplace
@@ -339,8 +310,7 @@ Token-gated (Bearer JWT or API token; HTTP Basic with token as password is also 
 - `GET /api/me/deleted-plugins` — soft-deleted plugins owned by the caller (drives the restore UI)
 
 *Admin (external git, optional)*
-- `POST /api/external-git/sync-out` — re-materialize every DB plugin into the external repo (initial alignment when DB is populated and external is empty/partial)
-- `POST /api/external-git/sync-in` — reconcile every plugin in the external tree into the DB (initial alignment when external is populated and DB is empty/partial)
+- `POST /api/external-git/sync-out` — re-materialize every DB plugin into the external repo (one-shot bootstrap when enabling sync on a populated DB)
 
 *Plugins*
 - `GET /api/plugins` — list all active plugins

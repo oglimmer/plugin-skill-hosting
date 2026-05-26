@@ -101,7 +101,6 @@ And conditionally:
 - **`ANTHROPIC_API_KEY`** — optional; enables server-side skill validation via `/api/skills/validate`.
 - **`METRICS_TOKEN`** — required when you take option B in decision 5.
 - **`EXTERNAL_GIT_TOKEN`** — required when `externalGit.remoteURL` is an HTTPS URL (see decision 6).
-- **`EXTERNAL_GIT_WEBHOOK_SECRET`** — enables `POST /api/webhooks/git` so GitHub/GitLab can notify the backend on external pushes (see decision 6).
 
 Sealing recipe and Argo CD layout in [§Sealed secret](#sealed-secret).
 
@@ -117,7 +116,7 @@ Most installs stay on the default.
 
 ### 6. External git mirror (optional, `externalGit.*`)
 
-When `externalGit.remoteURL` is non-empty the backend two-way syncs the marketplace with that single git repo. Each plugin lands at `plugins/<name>/`. Outbound: every UI/API/MCP write pushes the changed subtree. Inbound: a webhook from your forge fetches and reconciles external edits back into the DB. See the top-level README's [External git mirror](../../README.md#external-git-mirror-optional) section for the full behaviour matrix and conflict policy.
+When `externalGit.remoteURL` is non-empty the backend one-way mirrors the marketplace to that single git repo. Each plugin lands at `plugins/<name>/`. Every UI/API/MCP write pushes the changed subtree. Edits made directly in the external repo are NOT pulled back; they will be overwritten on the next outbound push. See the top-level README's [External git mirror](../../README.md#external-git-mirror-optional) section for the full mechanics.
 
 #### Step-by-step setup (GitHub example)
 
@@ -131,47 +130,40 @@ When `externalGit.remoteURL` is non-empty the backend two-way syncs the marketpl
   - `Metadata: Read` (auto-included)
 - Nothing else needed (no Pull requests, Issues, Actions, Workflows, Administration).
 
-**3. Generate a webhook secret**:
-```bash
-openssl rand -hex 32
-```
-
-**4. Add both to the application Secret.** Re-run your `kubectl create secret generic ... --dry-run=client -o yaml` command (or your SealedSecret pipeline) with two extra keys:
+**3. Add the PAT to the application Secret.** Re-run your `kubectl create secret generic ... --dry-run=client -o yaml` command (or your SealedSecret pipeline) with one extra key:
 ```
 --from-literal=EXTERNAL_GIT_TOKEN='github_pat_xxx'
---from-literal=EXTERNAL_GIT_WEBHOOK_SECRET='<the hex string>'
 ```
 
-**5. Set helm values** (overlay or chart `values.yaml`):
+**4. Set helm values** (overlay or chart `values.yaml`):
 ```yaml
 externalGit:
   remoteURL: "https://github.com/your-org/marketplace-mirror.git"
   branch: main
   # username defaults to x-access-token (GitHub PAT) — use "oauth2" for GitLab.
-  required: false  # set true to fail materialize when external push fails
 ```
 
-**6. Apply** (git commit + ArgoCD sync, or `helm upgrade`).
+**5. Apply** (git commit + ArgoCD sync, or `helm upgrade`).
 
-**7. Restart the backend pod** so it re-reads the Secret. Env-from-secretKeyRef is frozen at pod start — pods that started *before* the Secret update will see the old (often empty) values:
+**6. Restart the backend pod** so it re-reads the Secret. Env-from-secretKeyRef is frozen at pod start — pods that started *before* the Secret update will see the old (often empty) values:
 ```bash
 kubectl rollout restart deploy/plugin-skill-hosting-backend -n default
 ```
 
-**8. Verify env wiring** (the Secret has the right keys and the Deployment references them):
+**7. Verify env wiring** (the Secret has the right key and the Deployment references it):
 ```bash
 kubectl get secret plugin-skill-hosting-secret -n default \
   -o jsonpath='{.data}' | jq 'keys[]'
-# Expect EXTERNAL_GIT_TOKEN and EXTERNAL_GIT_WEBHOOK_SECRET in the list.
+# Expect EXTERNAL_GIT_TOKEN in the list.
 
 kubectl get deploy plugin-skill-hosting-backend -n default -o json | \
   jq -r '.spec.template.spec.containers[0].env[] |
          select(.name | startswith("EXTERNAL")) |
          "\(.name): \(.value // .valueFrom.secretKeyRef.key)"'
-# Expect 7 EXTERNAL_GIT_* entries.
+# Expect the EXTERNAL_GIT_* entries.
 ```
 
-**9. Verify startup logs**:
+**8. Verify startup logs**:
 ```bash
 kubectl logs deploy/plugin-skill-hosting-backend -n default | grep -i "external git"
 ```
@@ -179,32 +171,15 @@ Look for either:
 - `external git: cloned ... into /data/external/marketplace` (remote already had a branch), or
 - `external git: clone failed (... Remote branch main not found ...); initialising empty repo` followed by `external git sync: enabled, remote=... branch=main` (brand-new empty repo — backend pushes an initial README commit).
 
-**10. Register the webhook** in the GitHub repo's Settings → Webhooks:
-- Payload URL: `https://<your-host>/api/webhooks/git`
-- Content type: `application/json`
-- Secret: same value as `EXTERNAL_GIT_WEBHOOK_SECRET`
-- Events: **Just the push event**
-
-GitHub sends a `ping` immediately; the backend responds `204`. Check the webhook's "Recent Deliveries" tab for green checkmarks.
-
-For **GitLab**, register `https://<your-host>/api/webhooks/git` under Settings → Webhooks with `Secret token: <EXTERNAL_GIT_WEBHOOK_SECRET>` and trigger only on **Push events**.
-
-**11. Initial alignment.** The webhook only reacts to *deltas*, not to pre-existing state, so use the admin endpoints once:
+**9. Initial bootstrap** (only needed when enabling on an already-populated DB):
 ```bash
 TOKEN=<an admin's API token from the home page>
-# Populated DB, empty external → push everything out
 curl -X POST -H "Authorization: Bearer $TOKEN" \
   https://<your-host>/api/external-git/sync-out | jq
-
-# Populated external, empty DB → pull everything in
-curl -X POST -H "Authorization: Bearer $TOKEN" \
-  https://<your-host>/api/external-git/sync-in | jq
 ```
-Both are idempotent and admin-only. Run whichever applies (or both, in either order, for the populated/populated case).
+Idempotent and admin-only. Pushes every active plugin in the DB to the external repo in one shot.
 
-**12. Smoke test bidirectional flow**:
-- Edit a skill in the UI → within seconds, GitHub shows a new commit by `marketplace <marketplace@local>`.
-- Clone the mirror locally, edit a `SKILL.md`, push → backend log shows `external git import: reconciling 1 plugin(s) ...`; the change appears in the UI's skill history attributed to the commit author (matched by email to a DB user, or to the auto-created `external-git-sync` system user).
+**10. Smoke test**: edit a skill in the UI → within seconds, GitHub shows a new commit by `marketplace <marketplace@local>`.
 
 #### Troubleshooting
 
@@ -213,11 +188,8 @@ Both are idempotent and admin-only. Run whichever applies (or both, in either or
 | Log: `WARN: ... EXTERNAL_GIT_TOKEN is empty — push will likely fail` | Pod started before Secret was updated | `kubectl rollout restart deploy/plugin-skill-hosting-backend -n default` |
 | Log: `remote: Write access to repository not granted` / `403` | PAT lacks `Contents: Read and write`, or repo not in PAT's "Repository access" allowlist | Re-issue PAT with correct permissions, update Secret, restart pod |
 | Log: `Remote branch main not found in upstream origin` followed by `initialising empty repo` | Brand-new GitHub repo — no commits yet | Expected; backend creates the first commit automatically |
-| Webhook delivery shows `503` | `EXTERNAL_GIT_WEBHOOK_SECRET` empty in env (Secret update + pod restart needed) or `EXTERNAL_GIT_REMOTE_URL` empty | Add secret key, restart pod |
-| Webhook delivery shows `401` | Signature mismatch (GitHub) or token mismatch (GitLab) | Confirm the webhook secret in GitHub/GitLab exactly matches `EXTERNAL_GIT_WEBHOOK_SECRET` |
-| Webhook returns `204` but nothing imports | Push was to a branch other than `EXTERNAL_GIT_BRANCH` | Either push to the configured branch or change `externalGit.branch` |
-| `sync-in` succeeds but `reconciledPlugins: []` | External repo's `plugins/` dir is empty | Expected on a fresh remote — only the bootstrap `README.md` exists |
-| `sync-out` / `sync-in` returns `403` | Caller is not an admin | Promote via `POST /api/users/{id}/promote` or set `is_admin=true` directly in Postgres |
+| `sync-out` returns `403` | Caller is not an admin | Promote via `POST /api/users/{id}/promote` or set `is_admin=true` directly in Postgres |
+| `sync-out` returns `503` | `EXTERNAL_GIT_REMOTE_URL` empty or sync initialisation failed | Check startup logs; confirm Secret has `EXTERNAL_GIT_TOKEN` and pod has been restarted |
 
 ## Configure
 

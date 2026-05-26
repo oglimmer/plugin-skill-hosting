@@ -64,23 +64,26 @@ func (a *App) workPath(name string) string {
 }
 
 func runGit(dir string, args ...string) (string, error) {
-	return runGitAs(dir, "marketplace", "marketplace@local", nil, args...)
+	return runGitInternal(dir, nil, args...)
 }
 
-// runGitAs runs git with a configurable author/committer identity. If
-// redactedArgs is non-nil it is used (instead of args) in the error message,
-// and the git stderr is scrubbed of credentials before being returned — use
-// this when args contains a URL with an embedded token.
-func runGitAs(dir, authorName, authorEmail string, redactedArgs []string, args ...string) (string, error) {
+// runGitRedacted is like runGit but treats args as containing credentials:
+// the error message uses redactedArgs in place of args and the git stderr
+// is scrubbed before being returned.
+func runGitRedacted(dir string, redactedArgs []string, args ...string) (string, error) {
+	return runGitInternal(dir, redactedArgs, args...)
+}
+
+func runGitInternal(dir string, redactedArgs []string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
 	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME="+authorName,
-		"GIT_AUTHOR_EMAIL="+authorEmail,
-		"GIT_COMMITTER_NAME="+authorName,
-		"GIT_COMMITTER_EMAIL="+authorEmail,
+		"GIT_AUTHOR_NAME=marketplace",
+		"GIT_AUTHOR_EMAIL=marketplace@local",
+		"GIT_COMMITTER_NAME=marketplace",
+		"GIT_COMMITTER_EMAIL=marketplace@local",
 		"GIT_TERMINAL_PROMPT=0",
 	)
 	out, err := cmd.CombinedOutput()
