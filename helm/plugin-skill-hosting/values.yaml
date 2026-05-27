@@ -169,23 +169,35 @@ postgres:
       cpu: 100m
       memory: 128Mi
 
-# Ingress configuration. Cert-manager + ingress-nginx pattern from the dsa chart.
+# Ingress configuration.
+# Set className to match your cluster's ingress controller:
+#   "nginx"    – ingress-nginx (community or official)
+#   "traefik"  – Traefik v2 / v3
+#   "cilium"   – Cilium Ingress Controller
+# Leave className empty ("") to rely on the cluster-default IngressClass.
+#
 # Path order matters — backend paths must come BEFORE the frontend catch-all.
+#
+# Controller-specific features (large body for git push, SSE timeouts for MCP)
+# are handled by separate resources generated from the traefik / cilium
+# sub-sections below; the chart injects the necessary annotation automatically
+# when the relevant resource is enabled.
 ingress:
   enabled: true
   className: ""
   annotations:
     cert-manager.io/cluster-issuer: "oglimmer-com-dns"
-    # Git smart-HTTP needs request body buffering off and a generous body size
-    # for pushes; the nginx ingress defaults are fine for clones.
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
-    # MCP Streamable HTTP keeps a long-lived GET stream open for SSE; turn off
-    # response buffering and raise the read/send timeouts so events flow
-    # immediately and the stream isn't reaped after 60s.
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # ── ingress-nginx ────────────────────────────────────────────────────────
+    # Uncomment these when className = "nginx":
+    # nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    # nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    #
+    # ── Traefik / Cilium ─────────────────────────────────────────────────────
+    # No extra annotations needed here — the chart generates controller-specific
+    # resources automatically (see ingress.traefik and ingress.cilium below).
   hosts:
     - host: ai-plugins.oglimmer.com
       paths:
@@ -214,6 +226,43 @@ ingress:
     - secretName: tls-plugin-skill-hosting-ingress-dns
       hosts:
         - ai-plugins.oglimmer.com
+
+  # ── Traefik-specific ──────────────────────────────────────────────────────
+  # When middlewareEnabled=true the chart creates a traefik.io/v1alpha1
+  # Middleware that:
+  #   • increases the request body limit for git push  (maxRequestBodyBytes)
+  #   • enables response streaming for MCP/SSE         (flushInterval)
+  # The chart also injects the
+  # `traefik.ingress.kubernetes.io/router.middlewares` annotation on the
+  # Ingress automatically — you do NOT need to add it by hand.
+  #
+  # Requires the Traefik CRDs to be installed in the cluster.
+  # apiVersion selects the CRD group:
+  #   "traefik.io/v1alpha1"       – Traefik v3  (default)
+  #   "traefik.containo.us/v1alpha1" – Traefik v2
+  traefik:
+    middlewareEnabled: false
+    apiVersion: "traefik.io/v1alpha1"
+    # 50 MiB — generous enough for typical git push payloads.
+    maxRequestBodyBytes: 52428800
+    # Flush interval for SSE/streaming responses (Traefik default is 100ms).
+    # "0ms" = flush immediately, which is ideal for MCP Streamable HTTP.
+    flushInterval: "0ms"
+
+  # ── Cilium-specific ───────────────────────────────────────────────────────
+  # When envoyConfigEnabled=true the chart creates a CiliumEnvoyConfig that:
+  #   • raises the Envoy request body buffer limit for git push
+  #   • sets a long idle timeout on the /mcp prefix for SSE streams
+  #
+  # Requires Cilium ≥ 1.14 with the Ingress Controller enabled in the cluster
+  # (ingressController.enabled=true in the Cilium Helm chart).
+  cilium:
+    envoyConfigEnabled: false
+    # 50 MiB — matches the nginx proxy-body-size default above.
+    maxRequestBodyBytes: 52428800
+    # Idle timeout (seconds) applied to /mcp routes so SSE streams are not
+    # reaped by Envoy's default 5-minute idle timeout.
+    sseIdleTimeoutSeconds: 3600
 
 # Service account
 serviceAccount:

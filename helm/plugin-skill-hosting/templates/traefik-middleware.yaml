@@ -1,0 +1,47 @@
+{{- /*
+  Traefik Middleware for plugin-skill-hosting.
+
+  Rendered only when:
+    ingress.enabled                = true
+    ingress.className              = "traefik"
+    ingress.traefik.middlewareEnabled = true
+
+  What it configures
+  ──────────────────
+  buffering.maxRequestBodyBytes
+    Envoy/Traefik's default request body limit is too small for git push
+    payloads.  We raise it to ingress.traefik.maxRequestBodyBytes (default
+    50 MiB).
+
+  The chart injects a `traefik.ingress.kubernetes.io/router.middlewares`
+  annotation on the Ingress automatically (see templates/ingress.yaml) so you
+  do NOT need to add it by hand.
+
+  SSE / MCP streaming
+  ───────────────────
+  Traefik does not buffer responses by default, so MCP Streamable HTTP (SSE)
+  works out of the box — no middleware is needed for that.  The flushInterval
+  is set on the Traefik ServersTransport or entrypoint level; if your cluster
+  uses Traefik's default 100ms flush interval and you need immediate flushing,
+  set ingress.traefik.flushInterval in values.yaml and redeploy.
+
+  Note: for response-flush tuning via a Middleware you need Traefik's
+  `responseForwarding` block, which lives on the IngressRoute / EntryPoint, not
+  on a reusable Middleware.  The recommendation is to set
+    --entryPoints.websecure.transport.respondingTimeouts.readTimeout=0
+  on the Traefik Deployment for sites that use SSE heavily.
+*/}}
+{{- if and .Values.ingress.enabled (eq .Values.ingress.className "traefik") .Values.ingress.traefik.middlewareEnabled }}
+apiVersion: {{ .Values.ingress.traefik.apiVersion }}
+kind: Middleware
+metadata:
+  name: {{ include "psh.fullname" . }}-proxy
+  labels:
+    {{- include "psh.labels" . | nindent 4 }}
+spec:
+  buffering:
+    # Allow large request bodies so git push payloads are not rejected.
+    maxRequestBodyBytes: {{ .Values.ingress.traefik.maxRequestBodyBytes }}
+    # Retry once on network errors (e.g. brief backend restart during a push).
+    retryExpression: "IsNetworkError() && Attempts() < 2"
+{{- end }}
