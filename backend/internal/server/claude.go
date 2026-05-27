@@ -116,6 +116,13 @@ func logClaudeParseFailure(endpoint string, raw string, err error) {
 }
 
 type validateSkillRequest struct {
+	// PluginName + SkillName let the server load file CONTENTS from the DB
+	// so it can compute a file→file reference graph. Contents themselves
+	// are never forwarded to Claude — only the resulting edge list. Both
+	// fields are optional; when absent the validator still runs but loses
+	// the cross-file reference signal (and may flag orphans more eagerly).
+	PluginName  string             `json:"pluginName,omitempty"`
+	SkillName   string             `json:"skillName,omitempty"`
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
 	Body        string             `json:"body"`
@@ -133,24 +140,8 @@ func (a *App) handleValidateSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userMsg := fmt.Sprintf(
-		"Skill name: %s\n\n--- Description ---\n%s\n\n--- Body (Markdown after frontmatter) ---\n%s",
-		strings.TrimSpace(req.Name),
-		strings.TrimSpace(req.Description),
-		req.Body,
-	)
-	if len(req.Files) > 0 {
-		var sb strings.Builder
-		sb.WriteString("\n\n--- Supporting files (paths only, not contents) ---\n")
-		for _, f := range req.Files {
-			kind := "text"
-			if f.IsBinary {
-				kind = "binary"
-			}
-			fmt.Fprintf(&sb, "- %s (%s, %d bytes)\n", f.Path, kind, f.SizeBytes)
-		}
-		userMsg += sb.String()
-	}
+	edges := a.loadFileRefEdgesForSkill(r.Context(), req.PluginName, req.SkillName, req.Files)
+	userMsg := buildSkillPromptMessage(req.Name, req.Description, req.Body, "", req.Files, edges)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
@@ -176,6 +167,8 @@ func (a *App) handleValidateSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 type fixFindingRequest struct {
+	PluginName       string                  `json:"pluginName,omitempty"`
+	SkillName        string                  `json:"skillName,omitempty"`
 	Name             string                  `json:"name"`
 	Description      string                  `json:"description"`
 	Body             string                  `json:"body"`
@@ -195,25 +188,9 @@ func (a *App) handleFixFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	edges := a.loadFileRefEdgesForSkill(r.Context(), req.PluginName, req.SkillName, req.Files)
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Skill name: %s\n\n--- Description ---\n%s\n\n--- Body (Markdown after frontmatter) ---\n%s",
-		strings.TrimSpace(req.Name),
-		strings.TrimSpace(req.Description),
-		req.Body,
-	)
-	if strings.TrimSpace(req.ExtraFrontmatter) != "" {
-		fmt.Fprintf(&sb, "\n\n--- Extra frontmatter (YAML lines) ---\n%s", req.ExtraFrontmatter)
-	}
-	if len(req.Files) > 0 {
-		sb.WriteString("\n\n--- Supporting files (paths only, not contents) ---\n")
-		for _, f := range req.Files {
-			kind := "text"
-			if f.IsBinary {
-				kind = "binary"
-			}
-			fmt.Fprintf(&sb, "- %s (%s, %d bytes)\n", f.Path, kind, f.SizeBytes)
-		}
-	}
+	sb.WriteString(buildSkillPromptMessage(req.Name, req.Description, req.Body, req.ExtraFrontmatter, req.Files, edges))
 	fmt.Fprintf(&sb, "\n\n--- Finding to fix ---\nSeverity: %s\nTitle: %s\nDetail: %s",
 		req.Finding.Severity, req.Finding.Title, req.Finding.Detail,
 	)
@@ -240,4 +217,71 @@ func (a *App) handleFixFinding(w http.ResponseWriter, r *http.Request) {
 	}
 	metrics.ClaudeFindingFixTotal.WithLabelValues("success").Inc()
 	writeJSON(w, http.StatusOK, fix)
+}
+
+// buildSkillPromptMessage formats the user-side message both Claude calls
+// send to the validator. It includes the editable fields the user is
+// reviewing (name/description/body/optional extraFrontmatter), the list of
+// supporting files (paths only — contents are intentionally withheld), and
+// — when available — the cross-file reference graph computed server-side.
+// The edge list is the validator's only signal for inter-file links and
+// suppresses the "supporting file is never referenced" false positive when
+// a file is reached only from another supporting file.
+func buildSkillPromptMessage(name, description, body, extraFrontmatter string, files []SkillFileSummary, edges []FileRefEdge) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Skill name: %s\n\n--- Description ---\n%s\n\n--- Body (Markdown after frontmatter) ---\n%s",
+		strings.TrimSpace(name),
+		strings.TrimSpace(description),
+		body,
+	)
+	if strings.TrimSpace(extraFrontmatter) != "" {
+		fmt.Fprintf(&sb, "\n\n--- Extra frontmatter (YAML lines) ---\n%s", extraFrontmatter)
+	}
+	if len(files) > 0 {
+		sb.WriteString("\n\n--- Supporting files (paths only, not contents) ---\n")
+		for _, f := range files {
+			kind := "text"
+			if f.IsBinary {
+				kind = "binary"
+			}
+			fmt.Fprintf(&sb, "- %s (%s, %d bytes)\n", f.Path, kind, f.SizeBytes)
+		}
+	}
+	if len(edges) > 0 {
+		sb.WriteString("\n--- References (file → file, computed server-side from contents) ---\n")
+		sb.WriteString("Each line means the source file's content mentions the target file's path (or unique basename). Treat any file appearing as a target as referenced.\n")
+		for _, e := range edges {
+			fmt.Fprintf(&sb, "- %s -> %s\n", e.From, e.To)
+		}
+	}
+	return sb.String()
+}
+
+// loadFileRefEdgesForSkill resolves the plugin/skill, loads the skill's
+// stored text files, and returns the reference graph. Best-effort: any
+// lookup failure (missing plugin/skill, DB error, or fewer than 2 files)
+// silently returns nil so the validator still runs without the edge signal.
+// Contents stay server-side; only the returned edge list leaves this layer.
+func (a *App) loadFileRefEdgesForSkill(ctx context.Context, pluginName, skillName string, summaries []SkillFileSummary) []FileRefEdge {
+	if len(summaries) < 2 {
+		return nil
+	}
+	pluginName = strings.TrimSpace(pluginName)
+	skillName = strings.TrimSpace(skillName)
+	if pluginName == "" || skillName == "" {
+		return nil
+	}
+	p, err := a.loadPluginByName(ctx, pluginName)
+	if err != nil {
+		return nil
+	}
+	s, err := a.loadActiveSkill(ctx, p.ID, skillName)
+	if err != nil {
+		return nil
+	}
+	files, err := a.loadSkillFiles(ctx, s.ID)
+	if err != nil {
+		return nil
+	}
+	return computeFileRefEdges(files)
 }

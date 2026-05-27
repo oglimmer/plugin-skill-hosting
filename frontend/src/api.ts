@@ -127,6 +127,8 @@ export const api = {
       method: 'POST',
     }),
   validateSkill: (data: {
+    pluginName?: string
+    skillName?: string
     name: string
     description: string
     body: string
@@ -137,6 +139,8 @@ export const api = {
       body: JSON.stringify(data),
     }),
   fixFinding: (data: {
+    pluginName?: string
+    skillName?: string
     name: string
     description: string
     body: string

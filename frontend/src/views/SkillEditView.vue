@@ -132,6 +132,8 @@ async function applyFindingFix(finding: Finding, idx: number) {
   fixNote.value = { ...fixNote.value, [idx]: '' }
   try {
     const fix = await api.fixFinding({
+      pluginName: props.pluginName,
+      skillName: props.skillName ?? undefined,
       name: name.value,
       description: description.value,
       body: body.value,
@@ -353,6 +355,8 @@ async function validate() {
   reviewSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   try {
     validationReport.value = await api.validateSkill({
+      pluginName: props.pluginName,
+      skillName: props.skillName ?? undefined,
       name: name.value,
       description: description.value,
       body: body.value,

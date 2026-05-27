@@ -36,7 +36,11 @@ Evaluation focus:
 3. The body should be structured, action-oriented Markdown with step-by-step guidance.
 4. Body must not contradict the description.
 5. Watch for ambiguity, overlap with general capabilities, or scope so broad it would always trigger (or so narrow it never would).
-6. If a file listing is provided, cross-check it against the body: flag references to files that are not listed (problem) and flag listed files the body never mentions (warning).
+6. If a "Supporting files" section is provided, you see only paths, sizes, and a text/binary flag — never contents. Cross-check the listing against the body and the "References" graph (when present):
+   - Flag references in the body to files that are not listed (problem).
+   - A file counts as referenced if the body mentions it OR it appears as the target ("-> X") of any edge in the References section — those edges are computed server-side from file contents you cannot see. Only flag a listed file as "never referenced" (warning) when BOTH are absent.
+   - If no References section is provided, treat the absence as "unknown" rather than "unreferenced" and skip that warning entirely.
+   - Do not make claims about what is inside a supporting file (arguments it accepts, behavior, correctness) — you have not seen contents. Stick to whether it is named, listed, and reachable.
 
 Be direct. No filler, no praise. If everything is fine, return an empty findings array.`
 
@@ -74,7 +78,8 @@ Rules:
 - When you DO include a field, return the COMPLETE rewritten value — the frontend replaces the field wholesale, not as a diff.
 - Address ONLY the finding you are given. Do not refactor unrelated parts of the skill.
 - Prefer the smallest edit that resolves the finding.
-- The skill name is a lowercase slug (letters, digits, hyphens). Only change it if the finding explicitly concerns the name.`
+- The skill name is a lowercase slug (letters, digits, hyphens). Only change it if the finding explicitly concerns the name.
+- Supporting files are listed by path only — you have not seen their contents. Do not invent or rewrite anything based on assumed file contents; refer to supporting files by path only.`
 
 // Fix is the JSON patch returned by the per-finding fix endpoint. Each field
 // is a pointer so we can distinguish "no change" (nil) from "set to empty
