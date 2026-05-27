@@ -139,6 +139,14 @@ spec:
               key: EXTERNAL_GIT_TOKEN
               optional: true
         {{- end }}
+        # Go's os/user.Current() requires either CGO or $USER to be set.
+        # The container runs as uid 10001 which has no /etc/passwd entry and
+        # the binary is compiled without CGO, so we inject USER explicitly.
+        - name: USER
+          value: "nonroot"
+        {{- with .Values.backend.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         volumeMounts:
         - name: data
           mountPath: /data

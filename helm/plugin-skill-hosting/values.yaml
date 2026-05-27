@@ -109,6 +109,19 @@ backend:
       cpu: 100m
       memory: 128Mi
 
+  # Extra environment variables injected verbatim into the backend container.
+  # Useful for feature flags, tuning knobs, or any env var not covered above.
+  # Example:
+  #   extraEnv:
+  #     - name: MY_FLAG
+  #       value: "true"
+  #     - name: SECRET_VAL
+  #       valueFrom:
+  #         secretKeyRef:
+  #           name: my-secret
+  #           key: MY_KEY
+  extraEnv: []
+
 # Optional one-way mirror of the whole marketplace to a single external git
 # repository (GitHub, GitLab, …). Disabled when remoteURL is empty. The
 # external repo gets a `plugins/<name>/` subtree per plugin plus a generated
