@@ -1,105 +1,40 @@
 {{- /*
-  CiliumEnvoyConfig for plugin-skill-hosting.
+  Cilium ingress timeout — implemented via annotation, not CiliumEnvoyConfig.
 
-  Rendered only when:
-    ingress.enabled                   = true
-    ingress.className                 = "cilium"
-    ingress.cilium.envoyConfigEnabled = true
+  This file exists only as documentation.  No Kubernetes resource is rendered
+  here; timeout injection happens in templates/ingress.yaml where the chart
+  adds `ingress.cilium.io/request-timeout` automatically when:
+    ingress.className                    = "cilium"
+    ingress.cilium.requestTimeoutEnabled = true
 
-  Requires Cilium ≥ 1.14 with the Ingress Controller enabled:
-    ingressController.enabled = true   (Cilium Helm chart)
+  Why not CiliumEnvoyConfig?
+  ──────────────────────────
+  CiliumEnvoyConfig (CEC) targets Cilium's transparent L7 proxy that sits on
+  the data path for east-west (pod-to-pod) traffic.  The Cilium Ingress
+  Controller uses a *separate* Envoy instance managed internally; a CEC
+  scoped to the backend services would intercept intra-cluster traffic only
+  and would not affect the ingress Envoy's behaviour.
 
-  What it configures
-  ──────────────────
-  1. Request body limit (maxRequestBodyBytes)
-     Envoy's default per-request buffer is 1 MiB which is far too small for
-     git push payloads.  The Buffer HTTP filter raises it to
-     ingress.cilium.maxRequestBodyBytes (default 50 MiB).
+  For Cilium Ingress the official surface area is:
+    • ingress.cilium.io/request-timeout        — backend request timeout (s)
+    • ingress.cilium.io/loadbalancer-mode      — dedicated | shared
+    • ingress.cilium.io/tls-passthrough        — TLS passthrough
+    • ingress.cilium.io/force-https            — HTTP→HTTPS redirect
+    (full list: https://docs.cilium.io/en/stable/network/servicemesh/ingress/#annotations)
 
-  2. SSE idle timeout (/mcp prefix)
-     MCP Streamable HTTP keeps a long-lived GET stream open.  Without
-     explicit configuration, Envoy's 5-minute idle timeout would kill it.
-     We override the route-level idle_timeout for /mcp to
-     ingress.cilium.sseIdleTimeoutSeconds (default 3600 s).
+  Body size
+  ─────────
+  The Cilium Ingress Envoy does NOT add an HTTP Buffer filter by default.
+  There is therefore no request body size limit — git push payloads of any
+  size are proxied without additional configuration.
 
-  Implementation notes
-  ────────────────────
-  • The `services` list tells Cilium which backend Services this config
-    applies to; Cilium merges it with the Ingress-generated Envoy config.
-  • The listener / route names below match what Cilium generates for a
-    standard Ingress resource.  If your Cilium version uses different names
-    (check with `cilium ingress list`), adjust accordingly.
-  • Increasing maxRequestBytes globally is intentional — git push can come
-    in on /git from any client, so we apply it to the full listener rather
-    than a single route.
+  Per-route timeout (e.g. /mcp with no timeout, other routes with 60 s)
+  ──────────────────────────────────────────────────────────────────────
+  The `request-timeout` annotation is global (all routes).  Per-route timeout
+  control requires the Cilium Gateway API:
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+  with a BackendLBPolicy or HTTPRouteFilter.  This is outside the scope of
+  this chart's standard Ingress support; switch ingress.className to "" and
+  manage HTTPRoute resources separately if you need it.
 */}}
-{{- if and .Values.ingress.enabled (eq .Values.ingress.className "cilium") .Values.ingress.cilium.envoyConfigEnabled }}
-apiVersion: cilium.io/v2
-kind: CiliumEnvoyConfig
-metadata:
-  name: {{ include "psh.fullname" . }}-proxy
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "psh.labels" . | nindent 4 }}
-spec:
-  # Scope this config to the backend and frontend Services managed by this
-  # release so it does not interfere with other workloads in the namespace.
-  services:
-    - name: {{ include "psh.backend.fullname" . }}
-      namespace: {{ .Release.Namespace }}
-    - name: {{ include "psh.frontend.fullname" . }}
-      namespace: {{ .Release.Namespace }}
-
-  resources:
-    # ── HTTP Connection Manager ──────────────────────────────────────────────
-    # Patch the Envoy listener Cilium creates for this Ingress.
-    - "@type": type.googleapis.com/envoy.config.listener.v3.Listener
-      name: {{ .Release.Namespace }}/{{ include "psh.fullname" . }}
-      filter_chains:
-        - filters:
-            - name: envoy.filters.network.http_connection_manager
-              typed_config:
-                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-                # Allow the connection to stay open as long as any stream is
-                # active (0 = disabled).  The per-route idle_timeout on /mcp
-                # still controls individual stream lifetime.
-                stream_idle_timeout: 0s
-                http_filters:
-                  # Buffer filter: raise the per-request body limit so that
-                  # large git push payloads are not rejected with 413.
-                  - name: envoy.filters.http.buffer
-                    typed_config:
-                      "@type": type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer
-                      max_request_bytes: {{ .Values.ingress.cilium.maxRequestBodyBytes }}
-                  # Router must be the last filter in the chain.
-                  - name: envoy.filters.http.router
-                    typed_config:
-                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-
-    # ── Route Configuration ──────────────────────────────────────────────────
-    # Override idle_timeout for /mcp routes so SSE streams are not reaped.
-    - "@type": type.googleapis.com/envoy.config.route.v3.RouteConfiguration
-      name: {{ .Release.Namespace }}/{{ include "psh.fullname" . }}
-      virtual_hosts:
-        {{- range .Values.ingress.hosts }}
-        - name: {{ .host }}
-          domains:
-            - {{ .host | quote }}
-          routes:
-            # /mcp — MCP Streamable HTTP (SSE).  Set a long idle timeout so
-            # the stream is not killed by Envoy before the client disconnects.
-            - match:
-                prefix: "/mcp"
-              route:
-                cluster: {{ $.Release.Namespace }}/{{ include "psh.backend.fullname" $ }}/{{ $.Values.backend.service.port }}
-                # 0s timeout = no absolute deadline (stream lives until idle).
-                timeout: 0s
-                idle_timeout: {{ $.Values.ingress.cilium.sseIdleTimeoutSeconds }}s
-            # Catch-all — normal request timeout.
-            - match:
-                prefix: "/"
-              route:
-                cluster: {{ $.Release.Namespace }}/{{ include "psh.backend.fullname" $ }}/{{ $.Values.backend.service.port }}
-                timeout: 60s
-        {{- end }}
-{{- end }}

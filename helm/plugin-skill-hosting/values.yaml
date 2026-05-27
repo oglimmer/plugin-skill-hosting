@@ -228,41 +228,56 @@ ingress:
         - ai-plugins.oglimmer.com
 
   # ── Traefik-specific ──────────────────────────────────────────────────────
-  # When middlewareEnabled=true the chart creates a traefik.io/v1alpha1
-  # Middleware that:
-  #   • increases the request body limit for git push  (maxRequestBodyBytes)
-  #   • enables response streaming for MCP/SSE         (flushInterval)
+  # When middlewareEnabled=true the chart creates a Traefik Middleware CRD
+  # that raises the request body limit so large git push payloads are not
+  # rejected with HTTP 413.
   # The chart also injects the
   # `traefik.ingress.kubernetes.io/router.middlewares` annotation on the
   # Ingress automatically — you do NOT need to add it by hand.
   #
   # Requires the Traefik CRDs to be installed in the cluster.
   # apiVersion selects the CRD group:
-  #   "traefik.io/v1alpha1"       – Traefik v3  (default)
+  #   "traefik.io/v1alpha1"          – Traefik v3  (default)
   #   "traefik.containo.us/v1alpha1" – Traefik v2
+  #
+  # SSE / MCP streaming note: Traefik does NOT buffer responses by default,
+  # so MCP Streamable HTTP works without any extra Middleware. If you need
+  # immediate flush (not the default 100 ms), set
+  #   --entryPoints.<name>.transport.respondingTimeouts.readTimeout=0
+  # on the Traefik Deployment — this is static config, not a Middleware field.
   traefik:
     middlewareEnabled: false
     apiVersion: "traefik.io/v1alpha1"
-    # 50 MiB — generous enough for typical git push payloads.
+    # Hard limit on request body size. Traefik returns HTTP 413 if exceeded.
+    # 0 = unlimited. Default: 52428800 (50 MiB) — enough for git push.
     maxRequestBodyBytes: 52428800
-    # Flush interval for SSE/streaming responses (Traefik default is 100ms).
-    # "0ms" = flush immediately, which is ideal for MCP Streamable HTTP.
-    flushInterval: "0ms"
+    # Threshold below which the request body is held in memory; above this
+    # Traefik spills to a temp file on disk. Default: 1 MiB. Set equal to
+    # maxRequestBodyBytes to avoid disk I/O on large git push payloads.
+    memRequestBodyBytes: 52428800
 
   # ── Cilium-specific ───────────────────────────────────────────────────────
-  # When envoyConfigEnabled=true the chart creates a CiliumEnvoyConfig that:
-  #   • raises the Envoy request body buffer limit for git push
-  #   • sets a long idle timeout on the /mcp prefix for SSE streams
+  # The Cilium Ingress Controller exposes official annotations for timeout
+  # control. When requestTimeoutEnabled=true the chart injects the
+  # `ingress.cilium.io/request-timeout` annotation on the Ingress
+  # automatically.
   #
-  # Requires Cilium ≥ 1.14 with the Ingress Controller enabled in the cluster
-  # (ingressController.enabled=true in the Cilium Helm chart).
+  # Body size: Cilium's Envoy proxy does NOT add a Buffer filter by default,
+  # so there is no request body size limit for git push — no extra config
+  # needed.
+  #
+  # Per-route SSE timeout: `request-timeout` is global (all routes). If you
+  # need /mcp to have no timeout while keeping other routes short, use the
+  # Cilium Gateway API (HTTPRoute + BackendLBPolicy) instead of Ingress.
+  #
+  # Requires Cilium ≥ 1.13 with ingressController.enabled=true in the Cilium
+  # Helm chart.
   cilium:
-    envoyConfigEnabled: false
-    # 50 MiB — matches the nginx proxy-body-size default above.
-    maxRequestBodyBytes: 52428800
-    # Idle timeout (seconds) applied to /mcp routes so SSE streams are not
-    # reaped by Envoy's default 5-minute idle timeout.
-    sseIdleTimeoutSeconds: 3600
+    # Inject ingress.cilium.io/request-timeout annotation when true.
+    requestTimeoutEnabled: false
+    # Timeout in seconds applied to all backend requests. 0 = no timeout.
+    # 3600 is a reasonable default for SSE-heavy workloads.
+    requestTimeoutSeconds: 3600
 
 # Service account
 serviceAccount:

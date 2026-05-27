@@ -2,34 +2,36 @@
   Traefik Middleware for plugin-skill-hosting.
 
   Rendered only when:
-    ingress.enabled                = true
-    ingress.className              = "traefik"
-    ingress.traefik.middlewareEnabled = true
+    ingress.enabled                      = true
+    ingress.className                    = "traefik"
+    ingress.traefik.middlewareEnabled    = true
 
   What it configures
   ──────────────────
   buffering.maxRequestBodyBytes
-    Envoy/Traefik's default request body limit is too small for git push
-    payloads.  We raise it to ingress.traefik.maxRequestBodyBytes (default
-    50 MiB).
+    Hard limit on request body size (HTTP 413 if exceeded).
+    Raised to ingress.traefik.maxRequestBodyBytes (default 50 MiB) so that
+    large git push payloads are accepted.
+    0 = unlimited.
 
-  The chart injects a `traefik.ingress.kubernetes.io/router.middlewares`
-  annotation on the Ingress automatically (see templates/ingress.yaml) so you
-  do NOT need to add it by hand.
+  buffering.memRequestBodyBytes
+    Threshold below which Traefik holds the request body in RAM; above this
+    it spills to a temp file on disk (OS temp dir).  Default is 1 MiB, which
+    means a 50 MiB git push would cause 49 MiB of disk I/O.  We set it equal
+    to maxRequestBodyBytes so the whole body stays in memory.
+
+  retryExpression
+    Retry the request once on transient network errors (e.g. brief backend
+    restart mid-push).  Safe here because the body was already buffered.
+
+  The chart injects `traefik.ingress.kubernetes.io/router.middlewares`
+  on the Ingress automatically (see templates/ingress.yaml).
 
   SSE / MCP streaming
   ───────────────────
-  Traefik does not buffer responses by default, so MCP Streamable HTTP (SSE)
-  works out of the box — no middleware is needed for that.  The flushInterval
-  is set on the Traefik ServersTransport or entrypoint level; if your cluster
-  uses Traefik's default 100ms flush interval and you need immediate flushing,
-  set ingress.traefik.flushInterval in values.yaml and redeploy.
-
-  Note: for response-flush tuning via a Middleware you need Traefik's
-  `responseForwarding` block, which lives on the IngressRoute / EntryPoint, not
-  on a reusable Middleware.  The recommendation is to set
-    --entryPoints.websecure.transport.respondingTimeouts.readTimeout=0
-  on the Traefik Deployment for sites that use SSE heavily.
+  Traefik does NOT buffer responses by default, so MCP Streamable HTTP works
+  without any Middleware.  Flush interval is an entrypoint-level static
+  config, not a Middleware field — see the comment in values.yaml.
 */}}
 {{- if and .Values.ingress.enabled (eq .Values.ingress.className "traefik") .Values.ingress.traefik.middlewareEnabled }}
 apiVersion: {{ .Values.ingress.traefik.apiVersion }}
@@ -40,8 +42,10 @@ metadata:
     {{- include "psh.labels" . | nindent 4 }}
 spec:
   buffering:
-    # Allow large request bodies so git push payloads are not rejected.
-    maxRequestBodyBytes: {{ .Values.ingress.traefik.maxRequestBodyBytes }}
-    # Retry once on network errors (e.g. brief backend restart during a push).
+    # Hard limit — Traefik returns 413 if exceeded (0 = unlimited).
+    maxRequestBodyBytes: {{ .Values.ingress.traefik.maxRequestBodyBytes | int64 }}
+    # In-memory threshold — keep the whole body in RAM to avoid disk spill.
+    memRequestBodyBytes: {{ .Values.ingress.traefik.memRequestBodyBytes | int64 }}
+    # Retry once on network errors after the body has been buffered.
     retryExpression: "IsNetworkError() && Attempts() < 2"
 {{- end }}
