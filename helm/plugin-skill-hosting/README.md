@@ -49,7 +49,7 @@ helm upgrade --install plugin-skill-hosting . \
 | `Deployment` *frontend* | nginx serving the Vue SPA |
 | `Deployment` *postgres* (optional) | Bundled Postgres 16 — set `postgres.enabled=false` to use an external DB |
 | `Service` × 3 | ClusterIP services for backend / frontend / postgres |
-| `Ingress` | Routes `/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz` → backend, `/` → frontend |
+| `Ingress` | Routes `/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz`, `/oauth`, `/.well-known/oauth-authorization-server` → backend, `/` → frontend |
 | `PersistentVolumeClaim` × 0–2 | `/data` for bare git repos (omitted when `backend.persistence.enabled=false`), Postgres data dir |
 | `ServiceAccount` | Pod identity for backend + frontend |
 | `ConfigMap` | nginx config for the frontend |
@@ -205,7 +205,7 @@ The minimum overrides for a real deployment:
 | `imagePullSecrets[0].name` | Your pull-secret (or `[]` for public images) |
 | `auth.mode` | `password` (default in chart `values.yaml` is `oidc`) — when `oidc`, fill `auth.oidc.*` and ship `OIDC_CLIENT_SECRET` in the sealed secret |
 
-Path order in `ingress.hosts[].paths` matters: backend prefixes (`/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz`) must precede the `/` catch-all. The defaults are correct — preserve order if you edit them.
+Path order in `ingress.hosts[].paths` matters: backend prefixes (`/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz`, `/oauth`, `/.well-known/oauth-authorization-server`) must precede the `/` catch-all. The defaults are correct — preserve order if you edit them.
 
 ### Storage modes for git repos
 
@@ -345,7 +345,7 @@ This table is hand-maintained against `values.yaml`. Update both when adding or 
 | `ingress.enabled` | bool | `true` | Create the Ingress resource. |
 | `ingress.className` | string | `""` | IngressClass name. Empty uses the cluster default. |
 | `ingress.annotations` | object | cert-manager + nginx tunings | Ingress annotations — defaults wire up cert-manager and the nginx settings required by git smart-HTTP and the MCP SSE stream. |
-| `ingress.hosts` | list | one host with `/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz` → backend, `/` → frontend | Hosts and path → backend mapping. **Path order matters** — backend prefixes must precede the `/` catch-all. |
+| `ingress.hosts` | list | one host with `/api`, `/git`, `/mcp`, `/marketplace.json`, `/healthz`, `/oauth`, `/.well-known/oauth-authorization-server` → backend, `/` → frontend | Hosts and path → backend mapping. **Path order matters** — backend prefixes must precede the `/` catch-all. |
 | `ingress.tls` | list | one entry | TLS hosts and the secret cert-manager populates. |
 | `serviceAccount.create` | bool | `true` | Create a ServiceAccount for the pods. |
 | `serviceAccount.annotations` | object | `{}` | Annotations on the ServiceAccount. |

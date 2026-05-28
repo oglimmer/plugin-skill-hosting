@@ -220,6 +220,12 @@ ingress:
         - path: /readyz
           pathType: Exact
           backend: api
+        - path: /.well-known/oauth-authorization-server
+          pathType: Exact
+          backend: api
+        - path: /oauth
+          pathType: Prefix
+          backend: api
         - path: /
           pathType: Prefix
           backend: web
