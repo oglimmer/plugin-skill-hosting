@@ -266,6 +266,13 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	if pending != nil {
 		// OAuth-initiated flow: issue an auth code and redirect back to the
 		// OAuth client's redirect_uri instead of forwarding to the SPA.
+		// Mirror the password-mode check so a pending/rejected user can't be
+		// silently issued a code (the resulting token would fail at the MCP
+		// gate, but failing earlier produces a clearer error for the client).
+		if user.Status != UserStatusApproved {
+			oauthRedirectErr(w, r, pending.RedirectURI, pending.OAuthState, "access_denied", "account "+user.Status)
+			return
+		}
 		authCode, err := a.issueAuthCode(r.Context(), user.ID, pending.RedirectURI, pending.CodeChallenge)
 		if err != nil {
 			log.Printf("ERROR: issue auth code (oauth/oidc): %v", err)

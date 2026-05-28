@@ -56,6 +56,8 @@ func main() {
 		}
 	}
 
+	app.StartOAuthGC(context.Background())
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           server.NewRouter(app),

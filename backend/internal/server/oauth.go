@@ -261,6 +261,10 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// RFC 6749 §5.1: token endpoint responses (success and error) must not be
+	// cached. Set once here so every downstream writer inherits the header.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	if err := r.ParseForm(); err != nil {
 		oauthTokenErr(w, http.StatusBadRequest, "invalid_request", "cannot parse request body")
 		return
@@ -339,14 +343,19 @@ func (a *App) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rotate: atomically delete the old token and read the user_id.
-	var userID string
+	// Rotate: atomically delete the old token and read the user_id + status.
+	// The join enforces that the user still exists and lets us reject suspended
+	// accounts at refresh time instead of waiting for the access token to be
+	// blocked at the MCP gate.
+	var userID, userStatus string
 	err := a.DB.QueryRowContext(r.Context(),
-		`DELETE FROM oauth_refresh_tokens
-		 WHERE token_hash = $1 AND expires_at > now()
-		 RETURNING user_id`,
+		`DELETE FROM oauth_refresh_tokens t
+		 USING users u
+		 WHERE t.token_hash = $1 AND t.expires_at > now()
+		   AND u.id = t.user_id
+		 RETURNING t.user_id, u.status`,
 		sha256hex(rawToken),
-	).Scan(&userID)
+	).Scan(&userID, &userStatus)
 	if err == sql.ErrNoRows {
 		oauthTokenErr(w, http.StatusBadRequest, "invalid_grant", "refresh_token not found or expired")
 		return
@@ -354,6 +363,10 @@ func (a *App) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("ERROR: refresh token db: %v", err)
 		oauthTokenErr(w, http.StatusInternalServerError, "server_error", "internal error")
+		return
+	}
+	if userStatus != UserStatusApproved {
+		oauthTokenErr(w, http.StatusBadRequest, "invalid_grant", "account "+userStatus)
 		return
 	}
 
@@ -430,6 +443,39 @@ func (a *App) loadAndDeleteOAuthPending(ctx context.Context, stateKey string) (*
 		return nil, err
 	}
 	return row, nil
+}
+
+// StartOAuthGC launches a background goroutine that periodically deletes
+// expired rows from the OAuth tables. The happy path already deletes rows on
+// successful exchange/rotation, but abandoned flows (user closes the tab,
+// client crashes) leave dead rows that the `expires_at > now()` guards keep
+// out of use but never remove. No-op when OAuth is not configured.
+func (a *App) StartOAuthGC(ctx context.Context) {
+	if a.Cfg.MCPOAuthClientID == "" {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			a.gcExpiredOAuthRows(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func (a *App) gcExpiredOAuthRows(ctx context.Context) {
+	for _, table := range []string{"oauth_pending", "oauth_auth_codes", "oauth_refresh_tokens"} {
+		if _, err := a.DB.ExecContext(ctx,
+			`DELETE FROM `+table+` WHERE expires_at < now()`,
+		); err != nil {
+			log.Printf("ERROR: oauth gc %s: %v", table, err)
+		}
+	}
 }
 
 // validateOAuthClient checks the client credentials supplied in the request
