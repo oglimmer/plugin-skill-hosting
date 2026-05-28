@@ -1,6 +1,6 @@
 -- OAuth 2.1 Authorization Code + PKCE support for the MCP endpoint.
 
-CREATE TABLE oauth_auth_codes (
+CREATE TABLE IF NOT EXISTS oauth_auth_codes (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code_hash      TEXT NOT NULL UNIQUE,
     user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -10,7 +10,7 @@ CREATE TABLE oauth_auth_codes (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE oauth_refresh_tokens (
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     token_hash TEXT NOT NULL UNIQUE,
     user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -20,7 +20,7 @@ CREATE TABLE oauth_refresh_tokens (
 
 -- Transient store for OAuth params while the user authenticates via OIDC.
 -- Keyed by the nonce embedded in the OIDC state parameter.
-CREATE TABLE oauth_pending (
+CREATE TABLE IF NOT EXISTS oauth_pending (
     state_key      TEXT PRIMARY KEY,
     redirect_uri   TEXT NOT NULL,
     code_challenge TEXT NOT NULL,

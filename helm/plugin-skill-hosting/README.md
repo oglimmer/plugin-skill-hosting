@@ -101,6 +101,7 @@ And conditionally:
 - **`ANTHROPIC_API_KEY`** — optional; enables server-side skill validation via `/api/skills/validate`.
 - **`METRICS_TOKEN`** — required when you take option B in decision 5.
 - **`EXTERNAL_GIT_TOKEN`** — required when `externalGit.remoteURL` is an HTTPS URL (see decision 6).
+- **`MCP_OAUTH_CLIENT_SECRET`** — required when `mcpOAuth.clientID` is non-empty (enables OAuth 2.1 on `/mcp`; see the top-level README's [OAuth 2.1 for MCP](../../README.md#oauth-21-for-mcp-optional) section).
 
 Sealing recipe and Argo CD layout in [§Sealed secret](#sealed-secret).
 
@@ -191,6 +192,27 @@ Idempotent and admin-only. Pushes every active plugin in the DB to the external 
 | `sync-out` returns `403` | Caller is not an admin | Promote via `POST /api/users/{id}/promote` or set `is_admin=true` directly in Postgres |
 | `sync-out` returns `503` | `EXTERNAL_GIT_REMOTE_URL` empty or sync initialisation failed | Check startup logs; confirm Secret has `EXTERNAL_GIT_TOKEN` and pod has been restarted |
 
+### 7. OAuth 2.1 for `/mcp` (optional, `mcpOAuth.*`)
+
+For MCP clients that perform OAuth discovery instead of accepting a static bearer header — Claude.ai's remote MCP connector is the headline case — the backend can expose an OAuth 2.1 Authorization Code + PKCE server scoped to `/mcp`. Disabled until `mcpOAuth.clientID` is set. See the top-level README's [OAuth 2.1 for MCP](../../README.md#oauth-21-for-mcp-optional) section for the full contract (PKCE-S256, exact-match redirect URIs, 1-hour access tokens, 30-day rotating refresh tokens).
+
+To enable:
+
+1. Pick a `client_id` and a `client_secret` — both are static, deployment-level credentials.
+2. Set `mcpOAuth.clientID: "<your-id>"` in values. Optionally override `mcpOAuth.redirectURIs` (defaults to Claude.ai's two callback URLs).
+3. Add `MCP_OAUTH_CLIENT_SECRET=<your-secret>` to the sealed secret.
+4. Restart the backend deployment.
+
+The chart's Ingress already routes `/oauth/*` and `/.well-known/oauth-authorization-server` to the backend; no path edits required. Verify with:
+
+```bash
+curl -sS https://<your-host>/.well-known/oauth-authorization-server | jq
+```
+
+Should return the RFC 8414 metadata document. A 404 means either the secret isn't mounted yet (pod started before it existed → restart) or `mcpOAuth.clientID` is still empty in values.
+
+Static-bearer access to `/mcp` (the per-user API token) keeps working whether OAuth is enabled or not.
+
 ## Configure
 
 The minimum overrides for a real deployment:
@@ -251,7 +273,7 @@ The chart references — but does not create — a `Secret` holding the applicat
 
 You are responsible for putting a matching `Secret` (or `SealedSecret`, or anything that produces one — ExternalSecrets, etc.) into the release namespace before the pods start. Keeping the secret outside the chart is deliberate: `SealedSecret` ciphertext is scoped to the controller's key and to a specific name + namespace, so it cannot be bundled with a reusable chart.
 
-Required keys: `JWT_SECRET`, and either `POSTGRES_PASSWORD` (when `postgres.enabled=true`) or `DATABASE_URL` (when `false`). Optional keys: `ANTHROPIC_API_KEY`, `OIDC_CLIENT_SECRET` (required when `auth.mode=oidc`), `METRICS_TOKEN` (required when `backend.metrics.exposeOnIngress=true`).
+Required keys: `JWT_SECRET`, and either `POSTGRES_PASSWORD` (when `postgres.enabled=true`) or `DATABASE_URL` (when `false`). Optional keys: `ANTHROPIC_API_KEY`, `OIDC_CLIENT_SECRET` (required when `auth.mode=oidc`), `METRICS_TOKEN` (required when `backend.metrics.exposeOnIngress=true`), `MCP_OAUTH_CLIENT_SECRET` (required when `mcpOAuth.clientID` is non-empty), `EXTERNAL_GIT_TOKEN` (required when `externalGit.remoteURL` is an HTTPS URL).
 
 Generate and seal one with `kubeseal`:
 
@@ -263,6 +285,7 @@ kubectl create secret generic plugin-skill-hosting-secret \
   --from-literal=POSTGRES_PASSWORD=<db-password> \
   --from-literal=ANTHROPIC_API_KEY=<optional> \
   --from-literal=OIDC_CLIENT_SECRET=<when auth.mode=oidc> \
+  --from-literal=MCP_OAUTH_CLIENT_SECRET=<when mcpOAuth.clientID is set> \
   | kubeseal --format yaml | kubectl apply -f -
 ```
 

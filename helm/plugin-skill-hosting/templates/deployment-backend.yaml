@@ -125,6 +125,19 @@ spec:
               key: METRICS_TOKEN
               optional: true
         {{- end }}
+        {{- if .Values.mcpOAuth.clientID }}
+        - name: MCP_OAUTH_CLIENT_ID
+          value: {{ .Values.mcpOAuth.clientID | quote }}
+        - name: MCP_OAUTH_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "psh.secretName" . }}
+              key: MCP_OAUTH_CLIENT_SECRET
+        {{- with .Values.mcpOAuth.redirectURIs }}
+        - name: MCP_OAUTH_REDIRECT_URIS
+          value: {{ join "," . | quote }}
+        {{- end }}
+        {{- end }}
         {{- if .Values.externalGit.remoteURL }}
         - name: EXTERNAL_GIT_REMOTE_URL
           value: {{ .Values.externalGit.remoteURL | quote }}
