@@ -2,9 +2,10 @@
 import { onMounted, ref, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { api, errMsg } from '../api'
+import { api, errMsg, errStatus } from '../api'
 import type { Skill } from '../types'
 import ErrorAlert from '../components/ErrorAlert.vue'
+import ErrorView from './ErrorView.vue'
 import { useAuthStore } from '../stores/auth'
 import { usePluginStore } from '../stores/plugins'
 import { useConfirm } from '../composables/useConfirm'
@@ -19,6 +20,11 @@ const { current: plugin } = storeToRefs(pluginStore)
 const deletedSkills = ref<Skill[]>([])
 const loading = ref(true)
 const error = ref('')
+// When the *initial load* fails (missing plugin, server error) we take over
+// the whole view with a full-page ErrorView. In-page action errors (failed
+// edit/delete) keep `loadErrorCode` null and surface as an inline alert so the
+// loaded plugin stays on screen.
+const loadErrorCode = ref<number | null>(null)
 const copied = ref('')
 const activeTab = ref<'skills' | 'connect'>('skills')
 
@@ -62,12 +68,14 @@ async function copy(text: string, label: string) {
 async function load() {
   loading.value = true
   error.value = ''
+  loadErrorCode.value = null
   try {
     const name = route.params.name as string
     await pluginStore.loadPlugin(name)
     deletedSkills.value = await api.listDeletedSkills(name)
   } catch (e: unknown) {
     error.value = errMsg(e)
+    loadErrorCode.value = errStatus(e) ?? 500
   } finally {
     loading.value = false
   }
@@ -142,9 +150,15 @@ onMounted(() => {
 
 <template>
   <p v-if="loading" class="pd-loading">loading…</p>
-  <ErrorAlert v-else-if="error" :message="error" />
+  <ErrorView
+    v-else-if="loadErrorCode !== null"
+    :code="loadErrorCode"
+    :title="loadErrorCode === 404 ? 'Plugin not found' : undefined"
+    :details="error"
+  />
 
   <div v-else-if="plugin" class="pd">
+    <ErrorAlert v-if="error" :message="error" />
     <!-- Identity bar -->
     <header class="pd-bar">
       <div class="pd-bar__id">

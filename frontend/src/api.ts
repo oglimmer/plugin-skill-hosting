@@ -18,10 +18,29 @@ function token(): string | null {
   return localStorage.getItem('token')
 }
 
+// ApiError carries the HTTP status alongside the message so callers can react
+// to *what kind* of failure occurred — e.g. show a 404 error page for a
+// missing plugin vs a 500 page for a server fault. Plain `errMsg(e)` still
+// works on it since it extends Error.
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 export function errMsg(e: unknown, fallback = 'something went wrong'): string {
   if (e instanceof Error) return e.message || fallback
   if (typeof e === 'string') return e
   return fallback
+}
+
+// errStatus pulls the HTTP status out of a caught error, or undefined if the
+// failure didn't come from the API (e.g. a network error).
+export function errStatus(e: unknown): number | undefined {
+  return e instanceof ApiError ? e.status : undefined
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -36,7 +55,7 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
       const data = await res.json()
       if (data && data.error) msg = data.error
     } catch {}
-    throw new Error(msg)
+    throw new ApiError(res.status, msg)
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
@@ -104,7 +123,7 @@ export const api = {
         const data = await res.json()
         if (data && data.error) msg = data.error
       } catch {}
-      throw new Error(msg)
+      throw new ApiError(res.status, msg)
     }
     return res.json() as Promise<Skill>
   },

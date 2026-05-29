@@ -29,6 +29,12 @@ func NewRouter(app *App) http.Handler {
 		MaxAge:           300,
 	}))
 
+	// Catch-all fallbacks so unmatched routes / wrong methods return a
+	// consistent error (JSON for API clients, a friendly HTML page for
+	// browsers) instead of chi's bare "404 page not found" plaintext.
+	r.NotFound(app.handleNotFound)
+	r.MethodNotAllowed(app.handleMethodNotAllowed)
+
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
