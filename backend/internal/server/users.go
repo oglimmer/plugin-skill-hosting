@@ -25,12 +25,14 @@ type UserSummary struct {
 
 // Ordering: pending first so reviewers see actionable rows immediately,
 // then approved (oldest first — gives a stable directory), then rejected
-// for audit purposes.
+// for audit purposes. Soft-deleted users are filtered out entirely — they
+// only linger so their plugins keep a valid owner reference.
 const userListSelect = `
 	SELECT u.id, u.username, u.email, u.status, u.is_admin, u.created_at,
 	       u.approved_by, ap.username, u.approved_at
 	FROM users u
 	LEFT JOIN users ap ON ap.id = u.approved_by
+	WHERE u.status <> 'deleted'
 	ORDER BY
 	    CASE u.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
 	    u.created_at ASC`
@@ -170,11 +172,12 @@ func (a *App) handleRejectUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDeleteUser hard-deletes a rejected user, but only if they never
-// owned a plugin. The plugin check is intentionally strict — it counts
-// soft-deleted rows too, so anyone who has ever produced content keeps
-// their audit trail. A user who simply registered and was rejected has no
-// owned plugins and can be removed entirely.
+// handleDeleteUser soft-deletes a rejected user by flipping their status to
+// 'deleted'. We deliberately don't remove the row: plugins reference their
+// owner via owner_id ON DELETE CASCADE, so a hard delete would wipe every
+// plugin the user ever published. A 'deleted' user is hidden from the
+// directory (see userListSelect) and can no longer log in (auth requires
+// 'approved'), but the row survives so their plugins keep a valid owner.
 func (a *App) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if !isUUID(id) {
@@ -182,39 +185,32 @@ func (a *App) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var status string
-	err := a.DB.QueryRowContext(r.Context(),
-		`SELECT status FROM users WHERE id = $1`, id).Scan(&status)
-	if err == sql.ErrNoRows {
-		writeErr(w, http.StatusNotFound, "user not found")
-		return
-	}
+	res, err := a.DB.ExecContext(r.Context(),
+		`UPDATE users SET status = 'deleted' WHERE id = $1 AND status = 'rejected'`, id)
 	if err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if status != UserStatusRejected {
+	n, err := res.RowsAffected()
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	if n == 0 {
+		// Nothing updated: distinguish a missing user from one that isn't in
+		// the rejected state required for deletion.
+		var status string
+		err := a.DB.QueryRowContext(r.Context(),
+			`SELECT status FROM users WHERE id = $1`, id).Scan(&status)
+		if err == sql.ErrNoRows {
+			writeErr(w, http.StatusNotFound, "user not found")
+			return
+		}
+		if err != nil {
+			serverErr(w, r, err, "db error")
+			return
+		}
 		writeErr(w, http.StatusConflict, "only rejected users can be deleted")
-		return
-	}
-
-	var pluginCount int
-	if err := a.DB.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM plugins WHERE owner_id = $1`, id,
-	).Scan(&pluginCount); err != nil {
-		serverErr(w, r, err, "db error")
-		return
-	}
-	if pluginCount > 0 {
-		writeErr(w, http.StatusConflict,
-			"user has owned plugins and cannot be deleted")
-		return
-	}
-
-	if _, err := a.DB.ExecContext(r.Context(),
-		`DELETE FROM users WHERE id = $1 AND status = 'rejected'`, id,
-	); err != nil {
-		serverErr(w, r, err, "db error")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

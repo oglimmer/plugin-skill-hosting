@@ -48,6 +48,9 @@ var migration0011 string
 //go:embed migrations/0012_skill_audit_results.sql
 var migration0012 string
 
+//go:embed migrations/0013_user_soft_delete.sql
+var migration0013 string
+
 // Open opens the application's *sql.DB through pgx's database/sql adapter and
 // configures it for use behind a transaction-pool PgBouncer (the deployment in
 // front of OVH Managed PG, and the common HA layout in general).
@@ -130,6 +133,9 @@ func Migrate(db *sql.DB) error {
 	}
 	if _, err := db.Exec(migration0012); err != nil {
 		return fmt.Errorf("0012_skill_audit_results: %w", err)
+	}
+	if _, err := db.Exec(migration0013); err != nil {
+		return fmt.Errorf("0013_user_soft_delete: %w", err)
 	}
 	return nil
 }

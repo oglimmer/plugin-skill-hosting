@@ -45,11 +45,15 @@ func (a *App) MarkReady()    { a.ready.Store(true) }
 func (a *App) IsReady() bool { return a.ready.Load() }
 
 // User account status values. The status column has a CHECK constraint on
-// these exact strings — keep them in sync with migration 0008.
+// these exact strings — keep them in sync with migrations 0008 and 0013.
+// 'deleted' is a soft-delete terminal state: the row is retained so plugins
+// keep a valid owner, but the account is hidden from the directory and can't
+// log in.
 const (
 	UserStatusApproved = "approved"
 	UserStatusPending  = "pending"
 	UserStatusRejected = "rejected"
+	UserStatusDeleted  = "deleted"
 )
 
 type User struct {

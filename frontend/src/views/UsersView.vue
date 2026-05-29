@@ -51,7 +51,7 @@ async function approve(u: UserSummary) {
 async function remove(u: UserSummary) {
   const ok = await confirm({
     title: `Delete ${u.username}?`,
-    message: `${u.username} will be permanently removed from the database. This cannot be undone.`,
+    message: `${u.username} will be removed from the user list and can no longer log in. Any plugins they published are kept and remain available.`,
     confirmLabel: 'Delete',
     danger: true,
   })
