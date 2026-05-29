@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import { api, errMsg } from '../api'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import type { AuditResult } from '../types'
@@ -100,7 +101,11 @@ onMounted(load)
         <div class="result-head">
           <span class="badge" :class="`badge--${r.riskLevel}`">{{ r.riskScore }}</span>
           <div class="result-title">
-            <strong>{{ r.pluginName }} / {{ r.skillName }}</strong>
+            <RouterLink
+              class="skill-link"
+              :to="`/plugins/${r.pluginName}/skills/${r.skillName}/edit`"
+              @click.stop
+            >{{ r.pluginName }} / {{ r.skillName }}</RouterLink>
             <span class="muted summary">{{ r.summary }}</span>
           </div>
           <small class="muted when">{{ fmt(r.auditedAt) }}</small>
@@ -133,7 +138,12 @@ onMounted(load)
         </thead>
         <tbody>
           <tr v-for="r in clean" :key="r.skillId">
-            <td style="padding-left: 20px">{{ r.pluginName }} / {{ r.skillName }}</td>
+            <td style="padding-left: 20px">
+              <RouterLink
+                class="skill-link"
+                :to="`/plugins/${r.pluginName}/skills/${r.skillName}/edit`"
+              >{{ r.pluginName }} / {{ r.skillName }}</RouterLink>
+            </td>
             <td><span class="badge" :class="`badge--${r.riskLevel}`">{{ r.riskScore }}</span></td>
             <td class="muted">{{ r.summary || '—' }}</td>
             <td class="muted" style="white-space: nowrap"><small>{{ fmt(r.auditedAt) }}</small></td>
@@ -149,7 +159,10 @@ onMounted(load)
         </summary>
         <ul class="errlist">
           <li v-for="r in errored" :key="r.skillId">
-            <strong>{{ r.pluginName }} / {{ r.skillName }}</strong>
+            <RouterLink
+              class="skill-link"
+              :to="`/plugins/${r.pluginName}/skills/${r.skillName}/edit`"
+            >{{ r.pluginName }} / {{ r.skillName }}</RouterLink>
             <span class="muted"> — {{ r.error }}</span>
           </li>
         </ul>
@@ -224,6 +237,15 @@ onMounted(load)
   flex: 1;
   min-width: 0;
 }
+.skill-link {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom: 1px solid var(--accent);
+  padding-bottom: 1px;
+  text-decoration: none;
+  transition: color 0.12s ease;
+}
+.skill-link:hover { color: var(--accent); }
 .summary {
   font-size: 13px;
 }
