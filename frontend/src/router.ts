@@ -75,6 +75,17 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/plugins/:name/skills/:skillName/compare',
+      component: () => import('./views/SkillCompareView.vue'),
+      props: route => ({
+        pluginName: route.params.name,
+        skillName: route.params.skillName,
+        base: route.query.base != null ? Number(route.query.base) : null,
+        target: route.query.target != null ? Number(route.query.target) : null,
+      }),
+      meta: { requiresAuth: true },
+    },
+    {
       // Programmatic error target — guards and views can redirect here with a
       // status, e.g. router.push({ path: '/error', query: { code: 403 } }).
       path: '/error',

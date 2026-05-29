@@ -12,6 +12,15 @@ vi.mock('../api', () => ({
 import { api } from '../api'
 import SkillVersionHistory from './SkillVersionHistory.vue'
 
+// Lightweight RouterLink stub — renders an anchor whose href mirrors `to`, so
+// we can both silence the "failed to resolve component" warning and assert the
+// compare-view URLs without standing up a real router.
+const RouterLink = {
+  props: ['to'],
+  template: '<a :href="to"><slot /></a>',
+}
+const opts = { global: { components: { RouterLink } } }
+
 function v(overrides: Partial<{
   id: string
   version: number
@@ -46,6 +55,7 @@ describe('SkillVersionHistory', () => {
     ])
     render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: 'my-skill' },
+      ...opts,
     })
     expect(await screen.findByText('tweak')).toBeInTheDocument()
     expect(screen.getByText('initial')).toBeInTheDocument()
@@ -56,6 +66,7 @@ describe('SkillVersionHistory', () => {
     vi.mocked(api.skillVersions).mockResolvedValue([])
     render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: 'my-skill' },
+      ...opts,
     })
     expect(await screen.findByText('no history yet.')).toBeInTheDocument()
   })
@@ -64,6 +75,7 @@ describe('SkillVersionHistory', () => {
     vi.mocked(api.skillVersions).mockRejectedValue(new Error('boom'))
     render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: 'my-skill' },
+      ...opts,
     })
     expect(await screen.findByText('boom')).toBeInTheDocument()
   })
@@ -71,6 +83,7 @@ describe('SkillVersionHistory', () => {
   it('does not fetch when skillName is null (create mode)', async () => {
     render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: null },
+      ...opts,
     })
     await nextTick()
     expect(api.skillVersions).not.toHaveBeenCalled()
@@ -83,6 +96,7 @@ describe('SkillVersionHistory', () => {
     const user = userEvent.setup()
     const { emitted } = render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: 'my-skill' },
+      ...opts,
     })
     await user.click(await screen.findByRole('button', { name: /revert/i }))
     expect(emitted().revert).toEqual([[3]])
@@ -94,15 +108,39 @@ describe('SkillVersionHistory', () => {
     ])
     render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: 'my-skill' },
+      ...opts,
     })
     await screen.findByText('delete')
     expect(screen.queryByRole('button', { name: /revert/i })).toBeNull()
+  })
+
+  it('links each row to the compare view, with the previous version as base', async () => {
+    vi.mocked(api.skillVersions).mockResolvedValue([
+      v({ id: 'v3', version: 3, action: 'update' }),
+      v({ id: 'v1', version: 1, action: 'create' }),
+    ])
+    render(SkillVersionHistory, {
+      props: { pluginName: 'demo', skillName: 'my-skill' },
+      ...opts,
+    })
+    const links = await screen.findAllByRole('link', { name: 'diff' })
+    // v3's predecessor in this history is v1 (there is no v2).
+    expect(links[0]).toHaveAttribute(
+      'href',
+      '/plugins/demo/skills/my-skill/compare?base=1&target=3',
+    )
+    // v1 has no predecessor → base falls back to the empty sentinel (0).
+    expect(links[1]).toHaveAttribute(
+      'href',
+      '/plugins/demo/skills/my-skill/compare?base=0&target=1',
+    )
   })
 
   it('reloads when skillName prop changes', async () => {
     vi.mocked(api.skillVersions).mockResolvedValue([])
     const { rerender } = render(SkillVersionHistory, {
       props: { pluginName: 'demo', skillName: 'a' },
+      ...opts,
     })
     await nextTick()
     await rerender({ pluginName: 'demo', skillName: 'b' })

@@ -25,6 +25,14 @@ const trail = computed<Crumb[]>(() => {
   if (params.name) {
     const pluginCrumb: Crumb = { label: params.name, to: `/plugins/${params.name}` }
     if (params.skillName) {
+      if (path.endsWith('/compare')) {
+        return [
+          HOME,
+          pluginCrumb,
+          { label: params.skillName, to: `/plugins/${params.name}/skills/${params.skillName}/edit` },
+          { label: 'Compare versions' },
+        ]
+      }
       return [HOME, pluginCrumb, { label: params.skillName }]
     }
     if (path.endsWith('/skills/new')) {

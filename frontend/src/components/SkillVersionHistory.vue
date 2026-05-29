@@ -42,6 +42,21 @@ function fmt(d?: string | null) {
   if (!d) return ''
   return new Date(d).toLocaleString()
 }
+
+// Largest version strictly older than `version`, or 0 (the "empty" sentinel)
+// when it's the first version — so the diff for v1 shows the whole skill added.
+function predecessorOf(version: number): number {
+  let best = 0
+  for (const v of versions.value) {
+    if (v.version < version && v.version > best) best = v.version
+  }
+  return best
+}
+
+function compareLink(version: number): string {
+  return `/plugins/${props.pluginName}/skills/${props.skillName}`
+    + `/compare?base=${predecessorOf(version)}&target=${version}`
+}
 </script>
 
 <template>
@@ -80,12 +95,15 @@ function fmt(d?: string | null) {
           <td class="svh__when">{{ fmt(v.editedAt) }}</td>
           <td class="svh__desc">{{ v.description }}</td>
           <td class="svh__act">
-            <button
-              v-if="v.action !== 'delete'"
-              class="svh__revert"
-              type="button"
-              @click="emit('revert', v.version)"
-            >revert →</button>
+            <span class="svh__acts">
+              <RouterLink class="svh__link" :to="compareLink(v.version)">diff</RouterLink>
+              <button
+                v-if="v.action !== 'delete'"
+                class="svh__revert"
+                type="button"
+                @click="emit('revert', v.version)"
+              >revert →</button>
+            </span>
           </td>
         </tr>
       </tbody>
@@ -225,10 +243,29 @@ function fmt(d?: string | null) {
   word-break: break-word;
 }
 .svh__act {
-  text-align: right;
   width: 1%;
   white-space: nowrap;
+  text-align: right;
+  vertical-align: top;
 }
+.svh__acts {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+.svh__acts > * { flex: 0 0 auto; }
+.svh__link {
+  color: var(--text-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  font-weight: 500;
+  border-bottom: 1px solid transparent;
+  transition: color 0.12s ease;
+}
+.svh__link:hover { color: var(--accent); border-bottom-color: transparent; }
 
 .svh__action {
   display: inline-block;
