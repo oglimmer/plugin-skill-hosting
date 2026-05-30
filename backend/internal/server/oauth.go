@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -290,7 +291,7 @@ func (a *App) handleOAuthAuthorizeSubmit(w http.ResponseWriter, r *http.Request)
 		rerender("An error occurred. Please try again.")
 		return
 	}
-	dest := redirectURI + "?" + url.Values{"code": {authCode}, "state": {state}}.Encode()
+	dest := redirectWithParams(redirectURI, url.Values{"code": {authCode}, "state": {state}})
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
@@ -530,7 +531,13 @@ func (a *App) validateOAuthClient(r *http.Request) bool {
 	} else {
 		id, secret = r.FormValue("client_id"), r.FormValue("client_secret")
 	}
-	return id == a.Cfg.MCPOAuthClientID && secret == a.Cfg.MCPOAuthClientSecret
+	// Constant-time compares, both evaluated unconditionally (no && short
+	// circuit) so the response time doesn't reveal which field mismatched or
+	// leak the secret a byte at a time. Matches the bcrypt/HMAC handling used
+	// elsewhere for credentials.
+	idOK := subtle.ConstantTimeCompare([]byte(id), []byte(a.Cfg.MCPOAuthClientID)) == 1
+	secretOK := subtle.ConstantTimeCompare([]byte(secret), []byte(a.Cfg.MCPOAuthClientSecret)) == 1
+	return idOK && secretOK
 }
 
 func (a *App) validRedirectURI(uri string) bool {
@@ -567,7 +574,28 @@ func oauthRedirectErr(w http.ResponseWriter, r *http.Request, redirectURI, state
 	if state != "" {
 		q.Set("state", state)
 	}
-	http.Redirect(w, r, redirectURI+"?"+q.Encode(), http.StatusFound)
+	http.Redirect(w, r, redirectWithParams(redirectURI, q), http.StatusFound)
+}
+
+// redirectWithParams appends OAuth response parameters to a redirect URI,
+// merging them into any query string the URI already carries. RFC 6749 §4.1.2
+// requires response params to be added to the redirect URI's query component;
+// naive "redirectURI + \"?\" + Encode()" would emit a malformed second "?" for
+// a registered URI that already has a query string. redirect_uri is exact-match
+// validated against the allowlist before reaching here, so a parse failure is
+// not reachable in practice — fall back to the naive form rather than dropping
+// the redirect entirely.
+func redirectWithParams(redirectURI string, extra url.Values) string {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		return redirectURI + "?" + extra.Encode()
+	}
+	q := u.Query()
+	for k := range extra {
+		q.Set(k, extra.Get(k))
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func renderLoginForm(w http.ResponseWriter, status int, data loginFormData) {

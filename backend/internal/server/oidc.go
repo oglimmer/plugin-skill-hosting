@@ -283,7 +283,7 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		if pending.OAuthState != "" {
 			q.Set("state", pending.OAuthState)
 		}
-		http.Redirect(w, r, pending.RedirectURI+"?"+q.Encode(), http.StatusFound)
+		http.Redirect(w, r, redirectWithParams(pending.RedirectURI, q), http.StatusFound)
 		return
 	}
 

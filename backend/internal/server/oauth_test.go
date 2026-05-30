@@ -378,6 +378,101 @@ func TestAuthMiddlewareRejectsMCPAccessToken(t *testing.T) {
 	}
 }
 
+// --- client authentication --------------------------------------------------
+
+func TestValidateOAuthClient(t *testing.T) {
+	a := oauthTestApp()
+
+	basicReq := func(id, secret string) *http.Request {
+		r := httptest.NewRequest("POST", "/oauth/token", nil)
+		r.SetBasicAuth(id, secret)
+		return r
+	}
+	formReq := func(id, secret string) *http.Request {
+		body := url.Values{"client_id": {id}, "client_secret": {secret}}.Encode()
+		r := httptest.NewRequest("POST", "/oauth/token", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		_ = r.ParseForm()
+		return r
+	}
+
+	cases := []struct {
+		name string
+		r    *http.Request
+		want bool
+	}{
+		{"basic valid", basicReq("test-client", "test-client-secret"), true},
+		{"basic wrong secret", basicReq("test-client", "nope"), false},
+		{"basic wrong id", basicReq("other", "test-client-secret"), false},
+		{"basic both empty", basicReq("", ""), false},
+		{"form valid", formReq("test-client", "test-client-secret"), true},
+		{"form wrong secret", formReq("test-client", "nope"), false},
+	}
+	for _, tc := range cases {
+		if got := a.validateOAuthClient(tc.r); got != tc.want {
+			t.Errorf("%s: validateOAuthClient = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// Never authenticates when OAuth is disabled, even with empty creds matching
+	// empty config.
+	off := &App{Cfg: config.Config{}}
+	if off.validateOAuthClient(basicReq("", "")) {
+		t.Error("validateOAuthClient authenticated against an unconfigured (disabled) server")
+	}
+}
+
+// --- redirect URI param merging ---------------------------------------------
+
+func TestRedirectWithParams(t *testing.T) {
+	cases := []struct {
+		name     string
+		redirect string
+		extra    url.Values
+		want     string
+	}{
+		{
+			name:     "no existing query",
+			redirect: "https://claude.ai/api/mcp/auth_callback",
+			extra:    url.Values{"code": {"abc"}, "state": {"xyz"}},
+			want:     "https://claude.ai/api/mcp/auth_callback?code=abc&state=xyz",
+		},
+		{
+			name:     "preserves existing query",
+			redirect: "https://client.example.com/cb?tenant=acme",
+			extra:    url.Values{"code": {"abc"}},
+			want:     "https://client.example.com/cb?code=abc&tenant=acme",
+		},
+		{
+			name:     "error params with existing query",
+			redirect: "https://client.example.com/cb?foo=bar",
+			extra:    url.Values{"error": {"invalid_request"}, "state": {"s1"}},
+			want:     "https://client.example.com/cb?error=invalid_request&foo=bar&state=s1",
+		},
+	}
+	for _, tc := range cases {
+		got := redirectWithParams(tc.redirect, tc.extra)
+		if got != tc.want {
+			t.Errorf("%s: redirectWithParams = %q, want %q", tc.name, got, tc.want)
+		}
+		// Whatever we build must parse back cleanly and expose every param —
+		// the bug this guards against is a malformed second "?".
+		u, err := url.Parse(got)
+		if err != nil {
+			t.Errorf("%s: result does not parse: %v", tc.name, err)
+			continue
+		}
+		if strings.Count(got, "?") != 1 {
+			t.Errorf("%s: result has malformed query (%d '?'): %q", tc.name, strings.Count(got, "?"), got)
+		}
+		for k := range tc.extra {
+			if u.Query().Get(k) != tc.extra.Get(k) {
+				t.Errorf("%s: param %q = %q, want %q", tc.name, k, u.Query().Get(k), tc.extra.Get(k))
+			}
+		}
+	}
+}
+
 // --- discovery path routing -------------------------------------------------
 
 func TestDiscoveryRoutesResolveToBackend(t *testing.T) {
