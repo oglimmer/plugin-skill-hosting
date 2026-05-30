@@ -4,6 +4,7 @@ package config
 
 import (
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,12 +12,30 @@ import (
 	"time"
 )
 
+// defaultJWTSecret is the placeholder used when JWT_SECRET is unset. Load()
+// rejects it (and any secret shorter than minJWTSecretLen) at startup unless
+// ALLOW_INSECURE_JWT_SECRET=true, so a real deployment can never silently sign
+// tokens with a value that is published in this source tree.
+const defaultJWTSecret = "dev-secret-change-me-please-32-chars-min"
+
+// minJWTSecretLen is the smallest accepted JWT_SECRET. `openssl rand -hex 32`
+// yields 64 chars and is the documented way to generate one.
+const minJWTSecretLen = 32
+
 type Config struct {
 	DatabaseURL   string
 	JWTSecret     string
 	ListenAddr    string
 	DataDir       string
 	PublicBaseURL string
+
+	// AllowedOrigins is the CORS allowlist for browser cross-origin requests.
+	// Derived from CORS_ALLOWED_ORIGINS (comma-separated, may be "*") when set;
+	// otherwise from PublicBaseURL — permissive ("*") for localhost dev so the
+	// Vite dev server can reach the API, locked to the app's own origin in
+	// production (where the SPA is served same-origin behind nginx). Non-browser
+	// clients (git, curl, server-side MCP) don't send Origin and are unaffected.
+	AllowedOrigins []string
 
 	MarketplaceName string
 	DefaultLicense  string
@@ -99,7 +118,7 @@ func (c Config) RequiresUserApproval() bool {
 func Load() Config {
 	c := Config{
 		DatabaseURL:   getenv("DATABASE_URL", "postgres://marketplace:marketplace@localhost:5432/marketplace?sslmode=disable"),
-		JWTSecret:     getenv("JWT_SECRET", "dev-secret-change-me-please-32-chars-min"),
+		JWTSecret:     getenv("JWT_SECRET", defaultJWTSecret),
 		ListenAddr:    getenv("LISTEN_ADDR", ":8080"),
 		DataDir:       getenv("DATA_DIR", "./data"),
 		PublicBaseURL: getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
@@ -161,6 +180,21 @@ func Load() Config {
 	if c.AuthMode != "password" && c.AuthMode != "oidc" {
 		log.Fatalf("AUTH_MODE must be 'password' or 'oidc', got %q", c.AuthMode)
 	}
+	if c.AuthMode == "password" {
+		// password mode is a dev-only convenience: no login rate limiting and
+		// open self-service registration. Production must run AUTH_MODE=oidc.
+		// See README.md ("Authentication") and docs/security-hardening-plan.md.
+		log.Printf("WARN: AUTH_MODE=password is for local development only — set AUTH_MODE=oidc for any production deployment")
+	}
+	// Refuse to boot with a forgeable JWT signing key. The default value lives
+	// in this repo, so signing real tokens with it lets anyone mint a session
+	// for any user. ALLOW_INSECURE_JWT_SECRET=true is a local-dev escape hatch.
+	if insecureJWTSecret(c.JWTSecret) {
+		if getenv("ALLOW_INSECURE_JWT_SECRET", "") != "true" {
+			log.Fatalf("JWT_SECRET is the in-repo default or shorter than %d characters — set a unique value generated with `openssl rand -hex 32`. For local development only, set ALLOW_INSECURE_JWT_SECRET=true.", minJWTSecretLen)
+		}
+		log.Printf("WARN: JWT_SECRET is insecure (default or under %d chars) — permitted only because ALLOW_INSECURE_JWT_SECRET=true; never do this in production", minJWTSecretLen)
+	}
 	// DataDir is used as a git remote URL for the per-plugin work tree's
 	// `origin`; a relative path would be resolved against the work tree's
 	// cwd at push time and fail. Absolute paths from Docker/Helm pass
@@ -174,7 +208,39 @@ func Load() Config {
 	if c.AuthMode == "oidc" && len(c.AllowedGoogleWorkspaceDomains) == 0 {
 		log.Printf("WARN: AUTH_MODE=oidc but OIDC_GOOGLE_WORKSPACE_DOMAINS is empty — Google Workspace domain restriction is disabled")
 	}
+	c.AllowedOrigins = deriveAllowedOrigins(c.PublicBaseURL, getenv("CORS_ALLOWED_ORIGINS", ""))
+	if len(c.AllowedOrigins) == 1 && c.AllowedOrigins[0] == "*" {
+		log.Printf("WARN: CORS allows any origin (*) — set CORS_ALLOWED_ORIGINS or a non-localhost PUBLIC_BASE_URL to lock this down in production")
+	}
 	return c
+}
+
+// insecureJWTSecret reports whether a JWT signing secret is unsafe to sign real
+// tokens with — i.e. it's the in-repo default or shorter than minJWTSecretLen.
+func insecureJWTSecret(s string) bool {
+	return s == defaultJWTSecret || len(s) < minJWTSecretLen
+}
+
+// deriveAllowedOrigins builds the CORS allowlist. An explicit
+// CORS_ALLOWED_ORIGINS (comma-separated, may be "*") always wins. Otherwise it
+// derives from the public base URL: localhost/loopback deployments get "*" so
+// the Vite dev server (served from a different port) can call the API, while a
+// real host is locked to its own origin. Production serves the SPA same-origin
+// behind nginx, so the locked origin doesn't restrict legitimate browser
+// traffic; git/curl/server-side MCP don't use CORS and are unaffected.
+func deriveAllowedOrigins(publicBaseURL, override string) []string {
+	if o := parseURIList(override); len(o) > 0 {
+		return o
+	}
+	u, err := url.Parse(strings.TrimSpace(publicBaseURL))
+	if err != nil || u.Host == "" {
+		return []string{"*"}
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return []string{"*"}
+	}
+	return []string{u.Scheme + "://" + u.Host}
 }
 
 // parseDuration parses a Go duration string (e.g. "24h", "168h", "30m"),

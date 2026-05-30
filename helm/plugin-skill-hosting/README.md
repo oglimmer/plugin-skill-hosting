@@ -62,11 +62,13 @@ The chart's `values.yaml` reflects the maintainer's production setup. Before ins
 
 ### 1. Authentication mode (`auth.mode`)
 
+> **Production must use `oidc`.** `password` mode is a development-only convenience (no login rate limiting / brute-force protection, open self-service registration) and is unsupported for production deployments. See the main [README → Authentication](../../README.md#authentication). Pick one of the `oidc` rows below.
+
 | Mode | When to pick it | What you ship |
 | --- | --- | --- |
-| `password` | Solo or small team, no existing IdP. Users register with email + password; backend signs its own JWTs. | Nothing extra — just `JWT_SECRET` in the sealed secret. |
 | `oidc` | You already run an IdP (Keycloak, Auth0, Okta, Google, Azure AD, …). OIDC Authorization Code flow. | `auth.oidc.issuerURL` + `auth.oidc.clientID` in values; `OIDC_CLIENT_SECRET` in the sealed secret. |
 | `oidc` **+ Google Workspace allowlist** | Like `oidc` but limited to specific Google Workspace domains. | Same as `oidc`, plus `auth.oidc.googleWorkspaceDomains: [yourcompany.com, …]`. With a single domain the chart appends `hd=<domain>` to the auth URL so Google pre-filters the account chooser. The allowlist is only enforced when the issuer is Google — it's a no-op against other IdPs. |
+| `password` | **Local development only** — not for production. Users register with email + password; backend signs its own JWTs. | Just `JWT_SECRET` in the sealed secret. |
 
 Switching modes later invalidates existing sessions but does not touch user records.
 

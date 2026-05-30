@@ -42,8 +42,15 @@ Plugin and skill versions are managed automatically: the first plugin a user cre
 
 The backend supports two **sign-in** modes, picked at startup via `AUTH_MODE`:
 
-- `password` (default — used in dev): the built-in email/username/password flow with bcrypt + JWT.
+- `password` (default): the built-in email/username/password flow with bcrypt + JWT. **Development only.**
 - `oidc`: server-side OpenID Connect Authorization Code flow. Users are auto-provisioned in the local `users` table on first login (matched by `(issuer, sub)`, then by verified `email`).
+
+> [!IMPORTANT]
+> **`password` mode is for local development only. All production deployments MUST set `AUTH_MODE=oidc`.**
+>
+> The built-in password flow deliberately omits hardening that a public deployment requires — there is no login rate limiting / brute-force protection, no account lockout, and self-service registration (`/auth/register`) is open to anyone who can reach the server. It exists so the stack runs end-to-end on a laptop without standing up an IdP. Running it on a public, internet-facing instance is unsupported and unsafe. The backend logs a startup `WARN` when it boots in `password` mode as a reminder.
+>
+> Note: this dev-vs-prod split covers the *password sign-in flow only*. The session/token layer that both modes share (the 30-day browser JWT, the long-lived API token, the OAuth/MCP path) has its own hardening backlog tracked in [`docs/security-hardening-plan.md`](docs/security-hardening-plan.md).
 
 Inside the SPA, sessions ride on a JWT in `localStorage` sent as `Authorization: Bearer <jwt>`.
 

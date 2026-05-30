@@ -21,7 +21,7 @@ func NewRouter(app *App) http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(metrics.HTTPMiddleware)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins:   app.Cfg.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},

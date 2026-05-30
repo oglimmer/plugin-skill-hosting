@@ -21,6 +21,10 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-marketplace}:${POSTGRES_PASSWORD:-marketplace}@db:5432/${POSTGRES_DB:-marketplace}?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me-please-32-chars-min}
+      # Local-dev only: lets the backend boot with the insecure default
+      # JWT_SECRET above. Production (Helm/Terraform) must NOT set this and must
+      # supply a real 32+ char JWT_SECRET, or the backend refuses to start.
+      ALLOW_INSECURE_JWT_SECRET: ${ALLOW_INSECURE_JWT_SECRET:-true}
       LISTEN_ADDR: ":8080"
       DATA_DIR: /data
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
