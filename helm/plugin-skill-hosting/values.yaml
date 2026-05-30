@@ -16,6 +16,9 @@
 #   - EXTERNAL_GIT_TOKEN         (when externalGit.remoteURL is set with an HTTPS remote)
 #   - MCP_OAUTH_CLIENT_SECRET    (when mcpOAuth.clientID is set)
 #   - SMTP_PASSWORD              (when smtp.host is set and the relay needs auth)
+#   - API_TOKEN_ENC_KEY          (optional; 32-byte hex. Encrypts API tokens at
+#                                 rest. Derived from JWT_SECRET if unset — set a
+#                                 dedicated key to decouple from JWT_SECRET rotation)
 existingSecret: ""
 
 # Public URL (must be HTTPS — Claude Code rejects http:// plugin sources).

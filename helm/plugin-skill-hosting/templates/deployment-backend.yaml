@@ -86,6 +86,15 @@ spec:
             secretKeyRef:
               name: {{ include "psh.secretName" . }}
               key: JWT_SECRET
+        # Optional: a dedicated key for encrypting API tokens at rest. When
+        # absent the backend derives one from JWT_SECRET. Set it (and keep it
+        # stable) to decouple API-token display from JWT_SECRET rotation.
+        - name: API_TOKEN_ENC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "psh.secretName" . }}
+              key: API_TOKEN_ENC_KEY
+              optional: true
         - name: AUTH_MODE
           value: {{ .Values.auth.mode | quote }}
         {{- if eq .Values.auth.mode "oidc" }}

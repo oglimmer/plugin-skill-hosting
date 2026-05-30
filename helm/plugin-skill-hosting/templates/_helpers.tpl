@@ -139,7 +139,7 @@ Secret name. Resolution order:
 
 Required keys: JWT_SECRET, POSTGRES_PASSWORD (or DATABASE_URL when
 postgres.enabled=false). Optional keys: ANTHROPIC_API_KEY, OIDC_CLIENT_SECRET,
-METRICS_TOKEN.
+METRICS_TOKEN, API_TOKEN_ENC_KEY.
 */}}
 {{- define "psh.secretName" -}}
 {{- if .Values.existingSecret -}}

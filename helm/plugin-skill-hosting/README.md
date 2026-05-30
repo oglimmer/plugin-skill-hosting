@@ -104,6 +104,7 @@ And conditionally:
 - **`METRICS_TOKEN`** — required when you take option B in decision 5.
 - **`EXTERNAL_GIT_TOKEN`** — required when `externalGit.remoteURL` is an HTTPS URL (see decision 6).
 - **`MCP_OAUTH_CLIENT_SECRET`** — required when `mcpOAuth.clientID` is non-empty (enables OAuth 2.1 on `/mcp`; see the top-level README's [OAuth 2.1 for MCP](../../README.md#oauth-21-for-mcp-optional) section).
+- **`API_TOKEN_ENC_KEY`** — optional; the AES key (`openssl rand -hex 32`) used to encrypt API tokens at rest. If omitted, the backend derives one from `JWT_SECRET`. Set a dedicated key so rotating `JWT_SECRET` doesn't also re-key token encryption. **Caveat:** because token *authentication* uses a separate hash, the key only affects *re-display* — changing or adding it later leaves existing tokens authenticating fine, but they become non-displayable until regenerated, so set it from the first deploy.
 
 Sealing recipe and Argo CD layout in [§Sealed secret](#sealed-secret).
 
