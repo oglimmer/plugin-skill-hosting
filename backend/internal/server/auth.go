@@ -294,13 +294,7 @@ func (a *App) userByID(ctx context.Context, id string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Best-effort decrypt for display; on failure (e.g. key rotated) the token
-	// is simply not shown and the user can regenerate it. Auth is unaffected.
-	if enc.Valid && enc.String != "" {
-		if tok, derr := a.decryptAPIToken(enc.String); derr == nil {
-			u.APIToken = tok
-		}
-	}
+	u.APIToken = a.apiTokenForDisplay(enc)
 	return u, nil
 }
 

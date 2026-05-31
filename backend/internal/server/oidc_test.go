@@ -228,3 +228,25 @@ func TestOIDCLogout_MissingCookieStillRedirects(t *testing.T) {
 		t.Errorf("id_token_hint should be absent when cookie was missing, got %q", u.Query().Get("id_token_hint"))
 	}
 }
+
+// A failed callback (here: no state cookie) must redirect the browser to the
+// SPA callback with a STABLE reason code in the fragment — never raw error
+// text — so OIDCCallbackView can render friendly copy.
+func TestOIDCCallback_FailureRedirectsWithReasonCode(t *testing.T) {
+	a := &App{Cfg: config.Config{AuthMode: "oidc", PublicBaseURL: "https://example.com"}}
+	// No oidc_state cookie → state check fails before any DB/IdP work.
+	r := httptest.NewRequest("GET", "/api/auth/oidc/callback?state=whatever", nil)
+	rec := httptest.NewRecorder()
+	a.handleOIDCCallback(rec, r)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "https://example.com/auth/callback#") {
+		t.Fatalf("Location = %q, want SPA callback redirect", loc)
+	}
+	if !strings.Contains(loc, "error="+oidcErrProvider) {
+		t.Errorf("Location = %q, want error=%s", loc, oidcErrProvider)
+	}
+}

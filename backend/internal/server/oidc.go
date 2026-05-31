@@ -38,6 +38,28 @@ const (
 	oidcIDTokenMaxAge = 30 * 24 * 3600
 )
 
+// OIDC sign-in failure reason codes. They travel to the SPA as
+// /auth/callback#error=<code>; OIDCCallbackView.vue maps each to user-facing
+// copy, so keep the two in sync. Stable, non-sensitive identifiers only — never
+// raw error text (which could leak internals into the URL/history).
+const (
+	oidcErrProvider      = "provider_error"     // protocol / IdP / transient — retryable
+	oidcErrDomain        = "domain_not_allowed" // Workspace-domain allowlist rejection
+	oidcErrAccountReject = "account_rejected"   // admin declined the account
+	oidcErrAccountGone   = "account_deleted"    // account no longer active
+	oidcErrEmailConflict = "email_conflict"     // unverified email collides with an existing account
+	oidcErrAccount       = "account_error"      // unexpected provisioning failure
+)
+
+// Provisioning outcomes from findOrCreateOIDCUser that the callback maps to the
+// reason codes above. Sentinels (matched with errors.Is) so the message text
+// never reaches the user-facing URL.
+var (
+	errOIDCAccountRejected = errors.New("oidc: account rejected")
+	errOIDCAccountDeleted  = errors.New("oidc: account deleted")
+	errOIDCEmailConflict   = errors.New("oidc: unverified email conflicts with an existing account")
+)
+
 func (a *App) InitOIDC(ctx context.Context) error {
 	if a.Cfg.OIDCIssuerURL == "" || a.Cfg.OIDCClientID == "" || a.Cfg.OIDCClientSecret == "" {
 		return errors.New("OIDC_ISSUER_URL, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET are required when AUTH_MODE=oidc")
@@ -166,12 +188,12 @@ type oidcClaims struct {
 func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	stateCookie, err := r.Cookie(oidcStateCookie)
 	if err != nil || stateCookie.Value == "" || stateCookie.Value != r.URL.Query().Get("state") {
-		a.oidcFail(w, r, "state mismatch")
+		a.oidcFail(w, r, oidcErrProvider)
 		return
 	}
 	nonceCookie, err := r.Cookie(oidcNonceCookie)
 	if err != nil || nonceCookie.Value == "" {
-		a.oidcFail(w, r, "missing nonce")
+		a.oidcFail(w, r, oidcErrProvider)
 		return
 	}
 
@@ -182,60 +204,69 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		stateKey := strings.TrimPrefix(stateCookie.Value, "oauth:")
 		pending, err = a.loadAndDeleteOAuthPending(r.Context(), stateKey)
 		if err != nil || pending == nil {
-			a.oidcFail(w, r, "oauth session expired")
+			a.oidcFail(w, r, oidcErrProvider)
 			return
 		}
 	}
 
-	// fail routes errors to the OAuth client when in an OAuth flow, otherwise
-	// to the SPA error page.
-	fail := func(msg string) {
+	// fail routes a reason code to the OAuth client when in an OAuth flow,
+	// otherwise to the SPA callback. Policy/identity reasons map to OAuth
+	// access_denied; everything else is a server_error.
+	fail := func(reason string) {
 		if pending != nil {
-			oauthRedirectErr(w, r, pending.RedirectURI, pending.OAuthState, "server_error", msg)
+			metrics.LoginsTotal.WithLabelValues("oidc", "failure").Inc()
+			oauthErr := "server_error"
+			switch reason {
+			case oidcErrDomain, oidcErrAccountReject, oidcErrAccountGone, oidcErrEmailConflict:
+				oauthErr = "access_denied"
+			}
+			oauthRedirectErr(w, r, pending.RedirectURI, pending.OAuthState, oauthErr, reason)
 			return
 		}
-		a.oidcFail(w, r, msg)
+		a.oidcFail(w, r, reason) // increments the oidc failure metric internally
 	}
 
 	clearCookie(w, oidcStateCookie)
 	clearCookie(w, oidcNonceCookie)
 
+	// The IdP itself reported an error (e.g. the user cancelled consent).
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
-		fail(errParam)
+		log.Printf("INFO: oidc provider returned error=%q", errParam)
+		fail(oidcErrProvider)
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		fail("missing code")
+		fail(oidcErrProvider)
 		return
 	}
 
 	tok, err := a.OIDC.oauth2.Exchange(r.Context(), code)
 	if err != nil {
-		fail("token exchange failed")
+		fail(oidcErrProvider)
 		return
 	}
 	rawIDToken, ok := tok.Extra("id_token").(string)
 	if !ok || rawIDToken == "" {
-		fail("missing id_token")
+		fail(oidcErrProvider)
 		return
 	}
 	idToken, err := a.OIDC.verifier.Verify(r.Context(), rawIDToken)
 	if err != nil {
-		fail("id_token verify failed")
+		fail(oidcErrProvider)
 		return
 	}
 	var claims oidcClaims
 	if err := idToken.Claims(&claims); err != nil {
-		fail("claims parse failed")
+		fail(oidcErrProvider)
 		return
 	}
 	if claims.Nonce != nonceCookie.Value {
-		fail("nonce mismatch")
+		fail(oidcErrProvider)
 		return
 	}
 	if claims.Sub == "" {
-		fail("missing sub claim")
+		fail(oidcErrProvider)
 		return
 	}
 
@@ -244,20 +275,29 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// redirect path used for other failures) and audit-log the rejection.
 	// The error message is generic to avoid leaking the configured domains.
 	if err := workspaceauth.ValidateGoogleHD(idToken.Issuer, claims.HD, a.Cfg.AllowedGoogleWorkspaceDomains); err != nil {
-		metrics.LoginsTotal.WithLabelValues("oidc", "failure").Inc()
+		// Audit-logged server-side; the user sees a generic "domain not allowed"
+		// page that doesn't reveal which domains are configured. Route through
+		// fail() so a browser sign-in lands on the SPA (not a raw JSON 401) and
+		// an OAuth-initiated flow returns access_denied to the client.
 		log.Printf("WARN: oidc workspace domain rejected: hd=%q email=%q sub=%q issuer=%q",
 			claims.HD, claims.Email, claims.Sub, idToken.Issuer)
-		if pending != nil {
-			oauthRedirectErr(w, r, pending.RedirectURI, pending.OAuthState, "access_denied", "workspace domain not allowed")
-			return
-		}
-		writeErr(w, http.StatusUnauthorized, "workspace domain not allowed")
+		fail(oidcErrDomain)
 		return
 	}
 
 	user, err := a.findOrCreateOIDCUser(r.Context(), idToken.Issuer, &claims)
 	if err != nil {
-		fail("user provisioning failed: " + err.Error())
+		switch {
+		case errors.Is(err, errOIDCAccountRejected):
+			fail(oidcErrAccountReject)
+		case errors.Is(err, errOIDCAccountDeleted):
+			fail(oidcErrAccountGone)
+		case errors.Is(err, errOIDCEmailConflict):
+			fail(oidcErrEmailConflict)
+		default:
+			log.Printf("ERROR: oidc user provisioning: %v", err)
+			fail(oidcErrAccount)
+		}
 		return
 	}
 
@@ -290,7 +330,7 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// Normal OIDC flow: issue a session JWT and redirect to the SPA.
 	jwt, err := a.issueToken(user.ID, user.TokenVersion)
 	if err != nil {
-		a.oidcFail(w, r, "token issue failed")
+		a.oidcFail(w, r, oidcErrProvider)
 		return
 	}
 	// Stash the raw id_token so we can present it as id_token_hint when the
@@ -350,36 +390,44 @@ func (a *App) handleOIDCLogout(w http.ResponseWriter, r *http.Request) {
 func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *oidcClaims) (*User, error) {
 	// 1) match by (issuer, subject) — already linked
 	u := &User{}
+	var enc sql.NullString
 	err := a.DB.QueryRowContext(ctx,
-		`SELECT id, email, username, api_token, status, is_admin, created_at, token_version FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2`,
+		`SELECT id, email, username, api_token_enc, status, is_admin, created_at, token_version FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2`,
 		issuer, claims.Sub,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.Status, &u.IsAdmin, &u.CreatedAt, &u.TokenVersion)
+	).Scan(&u.ID, &u.Email, &u.Username, &enc, &u.Status, &u.IsAdmin, &u.CreatedAt, &u.TokenVersion)
 	if err == nil {
 		if u.Status == UserStatusRejected {
-			return nil, errors.New("account has been rejected")
+			return nil, errOIDCAccountRejected
 		}
 		if u.Status == UserStatusDeleted {
-			return nil, errors.New("account does not exist")
+			return nil, errOIDCAccountDeleted
 		}
+		u.APIToken = a.apiTokenForDisplay(enc)
 		return u, nil
 	}
 	if err != sql.ErrNoRows {
 		return nil, err
 	}
 
-	// 2) match by email — link to existing account if email_verified (or claim absent)
+	// 2) match by email — link to an existing local account ONLY when the IdP
+	//    asserts the email is verified. Linking an unverified email would let
+	//    anyone who can set that address at the IdP take over the account, so an
+	//    absent OR false email_verified is treated as NOT verified (fail closed).
+	//    Google always sets it; generic IdPs must too for auto-linking to work.
 	email := strings.ToLower(strings.TrimSpace(claims.Email))
-	if email != "" && (claims.EmailVerified == nil || *claims.EmailVerified) {
+	emailVerified := claims.EmailVerified != nil && *claims.EmailVerified
+	if email != "" && emailVerified {
 		err = a.DB.QueryRowContext(ctx,
-			`SELECT id, email, username, api_token, status, is_admin, created_at, token_version FROM users WHERE email = $1`, email,
-		).Scan(&u.ID, &u.Email, &u.Username, &u.APIToken, &u.Status, &u.IsAdmin, &u.CreatedAt, &u.TokenVersion)
+			`SELECT id, email, username, api_token_enc, status, is_admin, created_at, token_version FROM users WHERE email = $1`, email,
+		).Scan(&u.ID, &u.Email, &u.Username, &enc, &u.Status, &u.IsAdmin, &u.CreatedAt, &u.TokenVersion)
 		if err == nil {
 			if u.Status == UserStatusRejected {
-				return nil, errors.New("account has been rejected")
+				return nil, errOIDCAccountRejected
 			}
 			if u.Status == UserStatusDeleted {
-				return nil, errors.New("account does not exist")
+				return nil, errOIDCAccountDeleted
 			}
+			u.APIToken = a.apiTokenForDisplay(enc)
 			if _, err := a.DB.ExecContext(ctx,
 				`UPDATE users SET oidc_issuer = $1, oidc_subject = $2 WHERE id = $3`,
 				issuer, claims.Sub, u.ID,
@@ -430,6 +478,13 @@ func (a *App) findOrCreateOIDCUser(ctx context.Context, issuer string, claims *o
 		email, username, issuer, claims.Sub, sha256hex(apiTok), apiEnc, a.Cfg.RequiresUserApproval(),
 	).Scan(&id, &status, &isAdmin, &u.CreatedAt)
 	if err != nil {
+		// A unique-violation here means an account with this email (or username)
+		// already exists that we deliberately did NOT link — reached only when
+		// the IdP didn't assert a verified email (see step 2). Surface it as a
+		// distinct, user-facing reason rather than a raw DB error.
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
+			return nil, errOIDCEmailConflict
+		}
 		return nil, err
 	}
 	u.ID = id

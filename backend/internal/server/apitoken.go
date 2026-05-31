@@ -5,10 +5,27 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"log"
 )
+
+// apiTokenForDisplay best-effort decrypts a stored ciphertext so the UI can
+// show the raw API token. Returns "" when the column is null/empty or the
+// ciphertext can't be decrypted (e.g. the key was rotated) — authentication
+// never relies on this, so a display miss is harmless and the user can
+// regenerate. Used by every read path that returns a *User to the frontend.
+func (a *App) apiTokenForDisplay(enc sql.NullString) string {
+	if !enc.Valid || enc.String == "" {
+		return ""
+	}
+	tok, err := a.decryptAPIToken(enc.String)
+	if err != nil {
+		return ""
+	}
+	return tok
+}
 
 // encryptAPIToken seals a raw API token with AES-256-GCM for storage at rest.
 // Output is base64url(nonce || ciphertext). Authentication never depends on

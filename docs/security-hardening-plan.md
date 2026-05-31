@@ -1,6 +1,6 @@
 # Security hardening plan — session & token layer
 
-Status: **in progress** (S1–S7 done; S8 + deferred S5 session-shortening pending) · Last reviewed: 2026-05-31
+Status: **S1–S8 done** (only the deferred S5 browser session-shortening remains, optional) · Last reviewed: 2026-05-31
 
 ## Scope
 
@@ -222,7 +222,27 @@ and the same OAuth/MCP machinery.
 - **Effort:** ~0.5 day (CSP tuning is the variable). **Verification:** header
   assertions in a router test; manual check the SPA + editor still load.
 
-#### S8. OIDC account-linking trusts unverified email
+#### S8. OIDC account-linking trusts unverified email ✅ DONE
+- **Status:** Fixed. `findOrCreateOIDCUser` now links by email only when
+  `email_verified` is explicitly true (absent/false fails closed); an unverified
+  email that collides with an existing account is refused with a distinct
+  `email_conflict` reason instead of either linking (takeover) or leaking a raw
+  DB error. All OIDC sign-in failures were also reworked to emit **stable reason
+  codes** (`provider_error`, `domain_not_allowed`, `account_rejected`,
+  `account_deleted`, `email_conflict`, `account_error`) instead of raw text, and
+  the workspace-domain rejection now redirects to the SPA callback rather than
+  returning a raw JSON 401. `OIDCCallbackView.vue` renders friendly,
+  per-reason pages with appropriate retry/contact-admin guidance.
+- **Also caught & fixed here:** a latent **S4 regression** — `findOrCreateOIDCUser`
+  still `SELECT`ed the (now-NULL) plaintext `api_token` column, which would have
+  broken *all* OIDC logins after migration 0015 by scanning NULL into a string.
+  Both selects now read `api_token_enc` and decrypt via the shared
+  `apiTokenForDisplay` helper. (Missed in S4 because the OIDC path can't be
+  driven without a live IdP; surfaced while building the S8 integration test.)
+- **Verified:** DB-backed integration test (`TestFindOrCreateOIDCUser_EmailVerificationGating`,
+  gated on `TEST_DATABASE_URL`) confirms unverified+collision is rejected with the
+  victim's binding intact, and verified links correctly; plus a no-DB test that a
+  failed callback redirects with a stable reason code.
 - **Severity:** Low (context-dependent)
 - **Where:** `oidc.go:372` — links an incoming OIDC identity to an existing user
   by email when `email_verified` is **absent or true**.
@@ -246,9 +266,10 @@ and the same OAuth/MCP machinery.
 3. ✅ **S4 (encrypt API tokens at rest)** — done.
 4. ✅ **S5 audit + S7 headers** — done (no XSS sink found; CSP added).
 5. ✅ **S6 (rate limiting)** — done.
-6. **Remaining:** **S8** (OIDC unverified-email linking — ~1hr) plus the
-   **deferred S5 session-shortening** (browser short-token + refresh) when
-   prioritised.
+6. ✅ **S8 (OIDC unverified-email linking)** — done (+ fixed a latent S4
+   OIDC-login regression found along the way).
+7. **Remaining:** only the **deferred S5 session-shortening** (browser
+   short-token + refresh), optional, when prioritised.
 
 ## Out of scope (password mode is dev-only)
 
