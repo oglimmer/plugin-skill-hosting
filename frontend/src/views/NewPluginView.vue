@@ -45,7 +45,7 @@ async function submit() {
   <div class="card">
     <form @submit.prevent="submit">
       <label>Name (slug, lowercase, [a-z0-9-])</label>
-      <input v-model="name" required pattern="[a-z0-9][a-z0-9-]{1,62}[a-z0-9]" />
+      <input v-model="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}[a-z0-9]" />
 
       <label>Description</label>
       <input v-model="description" required />

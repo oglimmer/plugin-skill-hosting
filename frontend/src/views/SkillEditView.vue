@@ -530,7 +530,7 @@ watch(() => props.skillName, load)
           v-else
           v-model="name"
           required
-          pattern="[a-z0-9][a-z0-9-]{1,62}[a-z0-9]"
+          pattern="[a-z0-9][a-z0-9\-]{1,62}[a-z0-9]"
           placeholder="my-skill-slug"
           class="se-field__input"
         />
