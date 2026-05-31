@@ -9,12 +9,16 @@ onMounted(() => { load() })
 
 const year = new Date().getFullYear()
 
+function shortCommit(commit: string): string {
+  return commit && commit !== 'unknown' ? commit.slice(0, 7) : commit
+}
+
 const frontendLine = computed(() =>
-  `v${frontend.version} · ${frontend.gitCommit} · ${frontend.buildTime}`,
+  `v${frontend.version} · ${shortCommit(frontend.gitCommit)} · ${frontend.buildTime}`,
 )
 const backendLine = computed(() => {
   if (!backend.value) return '…'
-  return `v${backend.value.version} · ${backend.value.gitCommit} · ${backend.value.buildTime}`
+  return `v${backend.value.version} · ${shortCommit(backend.value.gitCommit)} · ${backend.value.buildTime}`
 })
 </script>
 
