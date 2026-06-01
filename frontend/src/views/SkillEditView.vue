@@ -9,6 +9,9 @@ import {
   fmtBytes,
   FOLDER_HINT,
   isWellKnownFolder,
+  isRootFolder,
+  folderLabel,
+  fileDisplayName,
 } from '../composables/useSkillFileManager'
 import SkillVersionHistory from '../components/SkillVersionHistory.vue'
 import ErrorAlert from '../components/ErrorAlert.vue'
@@ -626,11 +629,11 @@ watch(() => props.skillName, load)
           @drop="onDrop(folder, $event)"
         >
           <header class="se-tree__head">
-            <span class="se-tree__name">{{ folder }}/</span>
+            <span class="se-tree__name">{{ folderLabel(folder) }}</span>
             <span class="se-tree__count">[{{ filesByFolder[folder]?.length ?? 0 }}]</span>
             <span class="spacer"></span>
             <button
-              v-if="isWellKnownFolder(folder)"
+              v-if="isWellKnownFolder(folder) || isRootFolder(folder)"
               type="button"
               class="se-tree__act"
               title="New file"
@@ -653,7 +656,7 @@ watch(() => props.skillName, load)
                 @click="selectFile(f.path)"
               >
                 <span class="se-tree__chev">{{ selectedPath === f.path ? '▸' : '·' }}</span>
-                <span class="se-tree__item-name">{{ f.path.slice(folder.length + 1) }}</span>
+                <span class="se-tree__item-name">{{ fileDisplayName(folder, f.path) }}</span>
                 <span class="se-tree__item-meta">{{ f.isBinary ? 'bin' : 'txt' }} · {{ fmtBytes(f.sizeBytes) }}</span>
               </button>
             </li>
@@ -701,7 +704,8 @@ watch(() => props.skillName, load)
               @input="fileDirty = true"
             />
             <p v-else class="se-pane__binary">
-              binary file — cannot edit inline. download or upload a replacement onto <code>{{ selectedPath.split('/')[0] }}/</code>.
+              binary file — cannot edit inline. download or upload a replacement onto
+              <code>{{ selectedPath.includes('/') ? selectedPath.split('/')[0] + '/' : 'the root' }}</code>.
             </p>
 
             <div v-if="!fileIsBinary" class="se-pane__actions">

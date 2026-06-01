@@ -12,6 +12,13 @@ export type SkillFolder = string
 
 export const FOLDER_ORDER: readonly SkillFolder[] = ['scripts', 'references', 'assets']
 
+// ROOT_FOLDER is the sentinel key for files that live directly at the skill
+// root (a bare filename like config.json, no "/"). The backend accepts these,
+// but the UI only renders the root group — and offers + new / upload there —
+// once at least one root file already exists; there's no way to seed the first
+// root file from the UI (use the API tool for that).
+export const ROOT_FOLDER = '' as const
+
 export const FOLDER_HINT: Record<string, string> = {
   scripts: 'Code Claude can run (Python, bash, …)',
   references: 'Reference docs Claude reads on demand',
@@ -20,6 +27,28 @@ export const FOLDER_HINT: Record<string, string> = {
 
 export function isWellKnownFolder(folder: string): boolean {
   return folder in FOLDER_HINT
+}
+
+export function isRootFolder(folder: string): boolean {
+  return folder === ROOT_FOLDER
+}
+
+// folderLabel renders a folder key as its tree header — "(root)" for the root
+// group, otherwise the folder name with a trailing slash.
+export function folderLabel(folder: string): string {
+  return folder === ROOT_FOLDER ? '(root)' : `${folder}/`
+}
+
+// fileDisplayName strips the folder prefix from a path for in-tree display;
+// root files (no prefix) are shown as their full path.
+export function fileDisplayName(folder: string, path: string): string {
+  return folder === ROOT_FOLDER ? path : path.slice(folder.length + 1)
+}
+
+// joinFolderPath builds the stored path for a new file in a folder. Root files
+// have no prefix.
+export function joinFolderPath(folder: string, name: string): string {
+  return folder === ROOT_FOLDER ? name : `${folder}/${name}`
 }
 
 export const FILENAME_RE = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/
@@ -94,9 +123,10 @@ export function useSkillFileManager(
     const out: Record<string, SkillFileSummary[]> = {}
     for (const folder of FOLDER_ORDER) out[folder] = []
     for (const f of files.value) {
-      const root = f.path.split('/', 1)[0]
-      if (!out[root]) out[root] = []
-      out[root].push(f)
+      const slash = f.path.indexOf('/')
+      const folder = slash === -1 ? ROOT_FOLDER : f.path.slice(0, slash)
+      if (!out[folder]) out[folder] = []
+      out[folder].push(f)
     }
     return out
   })
@@ -104,11 +134,18 @@ export function useSkillFileManager(
   const folderList = computed<string[]>(() => {
     const known = new Set<string>(FOLDER_ORDER)
     const extras: string[] = []
+    let hasRoot = false
     for (const folder of Object.keys(filesByFolder.value)) {
-      if (!known.has(folder)) extras.push(folder)
+      if (folder === ROOT_FOLDER) {
+        hasRoot = true
+      } else if (!known.has(folder)) {
+        extras.push(folder)
+      }
     }
     extras.sort()
-    return [...FOLDER_ORDER, ...extras]
+    // Root group is listed first, but only when root files already exist —
+    // the UI never seeds an empty root.
+    return [...(hasRoot ? [ROOT_FOLDER] : []), ...FOLDER_ORDER, ...extras]
   })
 
   function requireSkill(): { plugin: string; skill: string } | null {
@@ -224,10 +261,13 @@ export function useSkillFileManager(
   async function promptNewFile(folder: SkillFolder) {
     const ctx = requireSkill()
     if (!ctx) return
+    const atRoot = folder === ROOT_FOLDER
     const raw = await prompt({
-      title: `New file in ${folder}/`,
-      message: 'Enter a relative path (e.g. build.py or sub/util.sh).',
-      placeholder: 'build.py',
+      title: atRoot ? 'New file at root' : `New file in ${folder}/`,
+      message: atRoot
+        ? 'Enter a filename (e.g. config.json).'
+        : 'Enter a relative path (e.g. build.py or sub/util.sh).',
+      placeholder: atRoot ? 'config.json' : 'build.py',
       confirmLabel: 'Create',
     })
     if (raw === null) return
@@ -237,7 +277,7 @@ export function useSkillFileManager(
       fileError.value = `invalid filename: ${trimmed}`
       return
     }
-    const path = `${folder}/${trimmed}`
+    const path = joinFolderPath(folder, trimmed)
     if (files.value.some(f => f.path === path)) {
       await selectFile(path)
       return
@@ -270,7 +310,7 @@ export function useSkillFileManager(
         fileError.value = `skipped invalid filename: ${file.name}`
         continue
       }
-      const path = `${folder}/${safe}`
+      const path = joinFolderPath(folder, safe)
       try {
         const buf = await file.arrayBuffer()
         const bytes = new Uint8Array(buf)

@@ -259,7 +259,8 @@ func shouldSkipZipEntry(p string) bool {
 // extractSkillZip parses an uploaded zip archive into a skill payload.
 // SKILL.md must be present, either at the root or under a single top-level
 // directory (which is then stripped). Every other file must validate against
-// validateSkillFilePath, i.e. live under scripts/, references/ or assets/.
+// validateSkillFilePath, i.e. either a bare filename at the skill root or a
+// path under a folder (scripts/, references/, assets/, or any other name).
 func extractSkillZip(buf []byte) (*parsedSkillImport, error) {
 	zr, err := zip.NewReader(bytes.NewReader(buf), int64(len(buf)))
 	if err != nil {

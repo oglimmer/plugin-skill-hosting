@@ -18,6 +18,8 @@ func TestValidateSkillFilePath(t *testing.T) {
 		"scripts/a/b/c/d.txt", // 5 segments — under the 6-segment cap
 		"custom/x.sh",         // arbitrary top-level folder via API tool
 		"evals/case_01.json",
+		"config.json", // root-level file (bare filename)
+		"LICENSE",     // root-level file, no extension
 	}
 	for _, p := range good {
 		if _, err := validateSkillFilePath(p); err != nil {
@@ -33,7 +35,8 @@ func TestValidateSkillFilePath(t *testing.T) {
 		{"scripts/../etc/passwd", "non-canonical"},
 		{"./scripts/x.sh", "non-canonical"},
 		{"/scripts/x.sh", "absolute"},
-		{"scripts", "no filename"},
+		{"SKILL.md", "reserved manifest name"},
+		{"skill.md", "reserved manifest name (case-insensitive)"},
 		{"scripts/a/b/c/d/e/f.txt", "too deep"},
 		{"scripts/with space.sh", "bad chars"},
 		{"with space/x.sh", "bad chars in top-level folder"},

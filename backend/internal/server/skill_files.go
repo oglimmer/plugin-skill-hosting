@@ -64,10 +64,13 @@ type skillFileUpsertReq struct {
 }
 
 // validateSkillFilePath canonicalises a user-supplied path and enforces the
-// structural rules. Returns the cleaned path on success. The top-level folder
-// may be any name passing validSkillFileSegmentRe; the UI surfaces the
-// conventional scripts/references/assets folders by default, but the API tool
-// is free to put files under arbitrary folder names.
+// structural rules. Returns the cleaned path on success. A path may live at the
+// skill root (a bare filename, e.g. config.json) or under any folder whose name
+// passes validSkillFileSegmentRe; the UI surfaces the conventional
+// scripts/references/assets folders by default, but the API tool is free to put
+// files at the root or under arbitrary folder names. SKILL.md is reserved — it
+// is generated from the skill body at materialization time, so a root file by
+// that name would clobber the manifest.
 func validateSkillFilePath(p string) (string, error) {
 	if p == "" {
 		return "", errors.New("path is required")
@@ -83,9 +86,6 @@ func validateSkillFilePath(p string) (string, error) {
 		return "", errors.New("path must be relative")
 	}
 	parts := strings.Split(cleaned, "/")
-	if len(parts) < 2 {
-		return "", errors.New("path must include a top-level folder and a filename (e.g. scripts/run.sh)")
-	}
 	if len(parts) > 6 {
 		return "", errors.New("path is nested too deep (max 6 segments)")
 	}
@@ -96,6 +96,9 @@ func validateSkillFilePath(p string) (string, error) {
 		if !validSkillFileSegmentRe.MatchString(seg) {
 			return "", fmt.Errorf("invalid characters in %q (allowed: A-Z a-z 0-9 _ . -)", seg)
 		}
+	}
+	if strings.EqualFold(cleaned, "SKILL.md") {
+		return "", errors.New("SKILL.md is reserved; edit the skill body instead")
 	}
 	return cleaned, nil
 }
