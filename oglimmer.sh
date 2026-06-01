@@ -364,6 +364,23 @@ DEV_APP_NAME="plugin-skill-hosting"
 DEV_PID_FILE="/tmp/${DEV_APP_NAME}.pid"
 DEV_LOG_FILE="/tmp/${DEV_APP_NAME}.log"
 
+# Create backend/.env on first run with a real JWT_SECRET so the backend boots
+# without manual setup. The default secret in the repo is rejected at startup,
+# so a fresh clone can't `start` otherwise. Only written when missing — an
+# existing .env (with a real secret) is never touched.
+ensure_backend_env() {
+    if [[ -f "$BACKEND_DIR/.env" ]]; then
+        return
+    fi
+    if ! command -v openssl >/dev/null 2>&1; then
+        log_error "backend/.env is missing and openssl is unavailable to generate a JWT_SECRET."
+        log_error "Create $BACKEND_DIR/.env with: JWT_SECRET=\$(openssl rand -hex 32)"
+        exit 1
+    fi
+    printf 'JWT_SECRET=%s\n' "$(openssl rand -hex 32)" > "$BACKEND_DIR/.env"
+    log_info "Created $BACKEND_DIR/.env with a generated JWT_SECRET (local dev only)."
+}
+
 # Load backend .env if present
 load_backend_env() {
     if [[ -f "$BACKEND_DIR/.env" ]]; then
@@ -374,6 +391,7 @@ load_backend_env() {
 }
 
 cmd_dev_start() {
+    ensure_backend_env
     load_backend_env
     if [[ -f "$DEV_PID_FILE" ]] && kill -0 "$(cat "$DEV_PID_FILE")" 2>/dev/null; then
         echo "already running (pid $(cat "$DEV_PID_FILE"))"
