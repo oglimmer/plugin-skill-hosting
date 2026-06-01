@@ -228,23 +228,35 @@ postgres:
       cpu: 100m
       memory: 128Mi
 
-# Ingress configuration. Cert-manager + ingress-nginx pattern from the dsa chart.
+# Ingress configuration.
+# Set className to match your cluster's ingress controller:
+#   "nginx"    – ingress-nginx (community or official)
+#   "traefik"  – Traefik v2 / v3
+#   "cilium"   – Cilium Ingress Controller
+# Leave className empty ("") to rely on the cluster-default IngressClass.
+#
 # Path order matters — backend paths must come BEFORE the frontend catch-all.
+#
+# Controller-specific features (large body for git push, SSE timeouts for MCP)
+# are handled by separate resources generated from the traefik / cilium
+# sub-sections below; the chart injects the necessary annotation automatically
+# when the relevant resource is enabled.
 ingress:
   enabled: true
   className: ""
   annotations:
     cert-manager.io/cluster-issuer: "oglimmer-com-dns"
-    # Git smart-HTTP needs request body buffering off and a generous body size
-    # for pushes; the nginx ingress defaults are fine for clones.
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
-    # MCP Streamable HTTP keeps a long-lived GET stream open for SSE; turn off
-    # response buffering and raise the read/send timeouts so events flow
-    # immediately and the stream isn't reaped after 60s.
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # ── ingress-nginx ────────────────────────────────────────────────────────
+    # Uncomment these when className = "nginx":
+    # nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    # nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    #
+    # ── Traefik / Cilium ─────────────────────────────────────────────────────
+    # No extra annotations needed here — the chart generates controller-specific
+    # resources automatically (see ingress.traefik and ingress.cilium below).
   hosts:
     - host: ai-plugins.oglimmer.com
       paths:
@@ -286,6 +298,58 @@ ingress:
     - secretName: tls-plugin-skill-hosting-ingress-dns
       hosts:
         - ai-plugins.oglimmer.com
+
+  # ── Traefik-specific ──────────────────────────────────────────────────────
+  # When middlewareEnabled=true the chart creates a Traefik Middleware CRD
+  # that raises the request body limit so large git push payloads are not
+  # rejected with HTTP 413.
+  # The chart also injects the
+  # `traefik.ingress.kubernetes.io/router.middlewares` annotation on the
+  # Ingress automatically — you do NOT need to add it by hand.
+  #
+  # Requires the Traefik CRDs to be installed in the cluster.
+  # apiVersion selects the CRD group:
+  #   "traefik.io/v1alpha1"          – Traefik v3  (default)
+  #   "traefik.containo.us/v1alpha1" – Traefik v2
+  #
+  # SSE / MCP streaming note: Traefik does NOT buffer responses by default,
+  # so MCP Streamable HTTP works without any extra Middleware. If you need
+  # immediate flush (not the default 100 ms), set
+  #   --entryPoints.<name>.transport.respondingTimeouts.readTimeout=0
+  # on the Traefik Deployment — this is static config, not a Middleware field.
+  traefik:
+    middlewareEnabled: false
+    apiVersion: "traefik.io/v1alpha1"
+    # Hard limit on request body size. Traefik returns HTTP 413 if exceeded.
+    # 0 = unlimited. Default: 52428800 (50 MiB) — enough for git push.
+    maxRequestBodyBytes: 52428800
+    # Threshold below which the request body is held in memory; above this
+    # Traefik spills to a temp file on disk. Default: 1 MiB. Set equal to
+    # maxRequestBodyBytes to avoid disk I/O on large git push payloads.
+    memRequestBodyBytes: 52428800
+
+  # ── Cilium-specific ───────────────────────────────────────────────────────
+  # The Cilium Ingress Controller exposes official annotations for timeout
+  # control. When requestTimeoutEnabled=true the chart injects the
+  # `ingress.cilium.io/request-timeout` annotation on the Ingress
+  # automatically.
+  #
+  # Body size: Cilium's Envoy proxy does NOT add a Buffer filter by default,
+  # so there is no request body size limit for git push — no extra config
+  # needed.
+  #
+  # Per-route SSE timeout: `request-timeout` is global (all routes). If you
+  # need /mcp to have no timeout while keeping other routes short, use the
+  # Cilium Gateway API (HTTPRoute + BackendLBPolicy) instead of Ingress.
+  #
+  # Requires Cilium ≥ 1.13 with ingressController.enabled=true in the Cilium
+  # Helm chart.
+  cilium:
+    # Inject ingress.cilium.io/request-timeout annotation when true.
+    requestTimeoutEnabled: false
+    # Timeout in seconds applied to all backend requests. 0 = no timeout.
+    # 3600 is a reasonable default for SSE-heavy workloads.
+    requestTimeoutSeconds: 3600
 
 # Service account
 serviceAccount:

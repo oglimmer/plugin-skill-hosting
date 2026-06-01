@@ -1,13 +1,35 @@
 {{- if .Values.ingress.enabled -}}
+{{- /*
+  Build the final annotations map.  Start with whatever the user supplied,
+  then inject controller-specific entries automatically so callers don't need
+  to know the exact annotation key / value format:
+
+    • Traefik: adds router.middlewares pointing at the Middleware resource
+               created by templates/traefik-middleware.yaml, but only when
+               ingress.traefik.middlewareEnabled=true.
+
+    • Cilium:  adds ingress.cilium.io/request-timeout (seconds, as a string)
+               when ingress.cilium.requestTimeoutEnabled=true.
+               This is the official Cilium Ingress annotation for backend
+               request timeouts — no CiliumEnvoyConfig needed.
+*/}}
+{{- $annotations := deepCopy (.Values.ingress.annotations | default dict) }}
+{{- if and (eq .Values.ingress.className "traefik") .Values.ingress.traefik.middlewareEnabled }}
+  {{- $mwRef := printf "%s-%s-proxy@kubernetescrd" .Release.Namespace (include "psh.fullname" .) }}
+  {{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.middlewares" $mwRef }}
+{{- end }}
+{{- if and (eq .Values.ingress.className "cilium") .Values.ingress.cilium.requestTimeoutEnabled }}
+  {{- $_ := set $annotations "ingress.cilium.io/request-timeout" (.Values.ingress.cilium.requestTimeoutSeconds | toString) }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "psh.fullname" . }}
   labels:
     {{- include "psh.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- if $annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml $annotations | nindent 4 }}
   {{- end }}
 spec:
   {{- if .Values.ingress.className }}
