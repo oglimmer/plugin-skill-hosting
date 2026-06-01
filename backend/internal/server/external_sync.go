@@ -70,79 +70,79 @@ func (es *externalSync) initialize(ctx context.Context) error {
 	}
 
 	if _, err := os.Stat(filepath.Join(es.workDir, ".git")); err == nil {
-		return es.refreshFromRemote()
+		return es.refreshFromRemote(ctx)
 	}
 	if err := os.MkdirAll(filepath.Dir(es.workDir), 0o755); err != nil {
 		return fmt.Errorf("create external workdir parent: %w", err)
 	}
 
-	if err := es.cloneFromRemote(); err == nil {
+	if err := es.cloneFromRemote(ctx); err == nil {
 		log.Printf("external git: cloned %s into %s", scrubGitCredentials(es.cfg.ExternalGitRemoteURL), es.workDir)
 		return nil
 	} else {
 		log.Printf("external git: clone failed (%v); initialising empty repo", err)
 	}
-	return es.initEmptyRepo()
+	return es.initEmptyRepo(ctx)
 }
 
-func (es *externalSync) cloneFromRemote() error {
+func (es *externalSync) cloneFromRemote(ctx context.Context) error {
 	pushURL := es.credentialedURL()
 	if _, err := os.Stat(es.workDir); err == nil {
 		if err := os.RemoveAll(es.workDir); err != nil {
 			return fmt.Errorf("remove stale workdir: %w", err)
 		}
 	}
-	_, err := runGitRedacted("",
+	_, err := runGitRedacted(ctx, "",
 		[]string{"clone", "--branch", es.cfg.ExternalGitBranch, scrubGitCredentials(pushURL), es.workDir},
 		"clone", "--branch", es.cfg.ExternalGitBranch, pushURL, es.workDir,
 	)
 	if err != nil {
 		return err
 	}
-	if _, err := runGit(es.workDir, "remote", "set-url", "origin", es.cfg.ExternalGitRemoteURL); err != nil {
+	if _, err := runGit(ctx, es.workDir, "remote", "set-url", "origin", es.cfg.ExternalGitRemoteURL); err != nil {
 		return fmt.Errorf("set-url origin: %w", err)
 	}
 	return nil
 }
 
-func (es *externalSync) initEmptyRepo() error {
+func (es *externalSync) initEmptyRepo(ctx context.Context) error {
 	if err := os.MkdirAll(es.workDir, 0o755); err != nil {
 		return err
 	}
-	if _, err := runGit(es.workDir, "init", "-b", es.cfg.ExternalGitBranch); err != nil {
+	if _, err := runGit(ctx, es.workDir, "init", "-b", es.cfg.ExternalGitBranch); err != nil {
 		return fmt.Errorf("init external repo: %w", err)
 	}
-	if _, err := runGit(es.workDir, "remote", "add", "origin", es.cfg.ExternalGitRemoteURL); err != nil {
+	if _, err := runGit(ctx, es.workDir, "remote", "add", "origin", es.cfg.ExternalGitRemoteURL); err != nil {
 		return fmt.Errorf("remote add origin: %w", err)
 	}
 	if err := es.writeRootReadme(); err != nil {
 		return err
 	}
-	if _, err := runGit(es.workDir, "add", "-A"); err != nil {
+	if _, err := runGit(ctx, es.workDir, "add", "-A"); err != nil {
 		return err
 	}
-	if _, err := runGit(es.workDir, "commit", "-m", "Initial commit"); err != nil {
+	if _, err := runGit(ctx, es.workDir, "commit", "-m", "Initial commit"); err != nil {
 		return fmt.Errorf("initial commit: %w", err)
 	}
-	return es.pushCurrentBranch()
+	return es.pushCurrentBranch(ctx)
 }
 
 // refreshFromRemote fetches the configured branch and hard-resets the local
 // HEAD to it. Any uncommitted local state is discarded — DB is the source of
 // truth, so we re-render from there.
-func (es *externalSync) refreshFromRemote() error {
+func (es *externalSync) refreshFromRemote(ctx context.Context) error {
 	pushURL := es.credentialedURL()
 	branch := es.cfg.ExternalGitBranch
-	if _, err := runGitRedacted(es.workDir,
+	if _, err := runGitRedacted(ctx, es.workDir,
 		[]string{"fetch", scrubGitCredentials(pushURL), branch},
 		"fetch", pushURL, branch,
 	); err != nil {
 		return fmt.Errorf("fetch external: %w", err)
 	}
-	if _, err := runGit(es.workDir, "checkout", "-B", branch, "FETCH_HEAD"); err != nil {
+	if _, err := runGit(ctx, es.workDir, "checkout", "-B", branch, "FETCH_HEAD"); err != nil {
 		return fmt.Errorf("checkout external branch: %w", err)
 	}
-	if _, err := runGit(es.workDir, "reset", "--hard", "FETCH_HEAD"); err != nil {
+	if _, err := runGit(ctx, es.workDir, "reset", "--hard", "FETCH_HEAD"); err != nil {
 		return fmt.Errorf("reset external: %w", err)
 	}
 	return nil
@@ -154,7 +154,7 @@ func (es *externalSync) refreshFromRemote() error {
 func (es *externalSync) pushPlugin(ctx context.Context, pluginName string, render func(targetDir string) error) error {
 	es.mu.Lock()
 	defer es.mu.Unlock()
-	return es.withRetry(func() error {
+	return es.withRetry(ctx, func() error {
 		pluginDir := filepath.Join(es.workDir, "plugins", pluginName)
 		if err := os.RemoveAll(pluginDir); err != nil {
 			return fmt.Errorf("clean external plugin dir: %w", err)
@@ -165,7 +165,7 @@ func (es *externalSync) pushPlugin(ctx context.Context, pluginName string, rende
 		if err := es.writeRootArtefacts(ctx); err != nil {
 			return err
 		}
-		return es.commitAndPush(fmt.Sprintf("Update plugin %s", pluginName))
+		return es.commitAndPush(ctx, fmt.Sprintf("Update plugin %s", pluginName))
 	})
 }
 
@@ -175,13 +175,13 @@ func (es *externalSync) pushPlugin(ctx context.Context, pluginName string, rende
 func (es *externalSync) deletePlugin(ctx context.Context, pluginName string) error {
 	es.mu.Lock()
 	defer es.mu.Unlock()
-	return es.withRetry(func() error {
+	return es.withRetry(ctx, func() error {
 		pluginDir := filepath.Join(es.workDir, "plugins", pluginName)
 		if _, err := os.Stat(pluginDir); errors.Is(err, os.ErrNotExist) {
 			if err := es.writeRootArtefacts(ctx); err != nil {
 				return err
 			}
-			return es.commitAndPush(fmt.Sprintf("Remove plugin %s", pluginName))
+			return es.commitAndPush(ctx, fmt.Sprintf("Remove plugin %s", pluginName))
 		}
 		if err := os.RemoveAll(pluginDir); err != nil {
 			return fmt.Errorf("remove external plugin dir: %w", err)
@@ -189,7 +189,7 @@ func (es *externalSync) deletePlugin(ctx context.Context, pluginName string) err
 		if err := es.writeRootArtefacts(ctx); err != nil {
 			return err
 		}
-		return es.commitAndPush(fmt.Sprintf("Remove plugin %s", pluginName))
+		return es.commitAndPush(ctx, fmt.Sprintf("Remove plugin %s", pluginName))
 	})
 }
 
@@ -206,40 +206,40 @@ func (es *externalSync) writeRootArtefacts(ctx context.Context) error {
 // withRetry runs op, and if the resulting error looks like a push rejection
 // (remote moved), refreshes from origin and runs op once more. All other
 // errors are returned immediately.
-func (es *externalSync) withRetry(op func() error) error {
+func (es *externalSync) withRetry(ctx context.Context, op func() error) error {
 	err := op()
 	if err == nil || !isPushRejection(err) {
 		return err
 	}
 	log.Printf("external git: push rejected, refreshing and retrying once: %v", err)
-	if rErr := es.refreshFromRemote(); rErr != nil {
+	if rErr := es.refreshFromRemote(ctx); rErr != nil {
 		return fmt.Errorf("refresh after push rejection: %w (original: %v)", rErr, err)
 	}
 	return op()
 }
 
-func (es *externalSync) commitAndPush(message string) error {
-	if _, err := runGit(es.workDir, "add", "-A"); err != nil {
+func (es *externalSync) commitAndPush(ctx context.Context, message string) error {
+	if _, err := runGit(ctx, es.workDir, "add", "-A"); err != nil {
 		return err
 	}
-	out, err := runGit(es.workDir, "status", "--porcelain")
+	out, err := runGit(ctx, es.workDir, "status", "--porcelain")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(out) == "" {
 		return nil
 	}
-	if _, err := runGit(es.workDir, "commit", "-m", message); err != nil {
+	if _, err := runGit(ctx, es.workDir, "commit", "-m", message); err != nil {
 		return err
 	}
-	return es.pushCurrentBranch()
+	return es.pushCurrentBranch(ctx)
 }
 
-func (es *externalSync) pushCurrentBranch() error {
+func (es *externalSync) pushCurrentBranch(ctx context.Context) error {
 	pushURL := es.credentialedURL()
 	branch := es.cfg.ExternalGitBranch
 	refspec := "HEAD:refs/heads/" + branch
-	_, err := runGitRedacted(es.workDir,
+	_, err := runGitRedacted(ctx, es.workDir,
 		[]string{"push", scrubGitCredentials(pushURL), refspec},
 		"push", pushURL, refspec,
 	)

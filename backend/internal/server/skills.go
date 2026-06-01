@@ -104,7 +104,7 @@ func (a *App) querySkills(ctx context.Context, query string, args ...interface{}
 		}
 		skills = append(skills, s)
 	}
-	return skills, nil
+	return skills, rows.Err()
 }
 
 // loadActiveSkill fetches a single non-deleted skill by (plugin, name).
@@ -231,8 +231,21 @@ func (a *App) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	if req.ExtraFrontmatter != nil {
 		extra = *req.ExtraFrontmatter
 	}
+
+	tx, err := a.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
 	var id string
-	err = a.DB.QueryRowContext(r.Context(), `
+	err = tx.QueryRowContext(r.Context(), `
 		INSERT INTO skills (plugin_id, name, description, body, extra_frontmatter, created_by, updated_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING id
 	`, p.ID, req.Name, req.Description, req.Body, extra, user.ID).Scan(&id)
@@ -240,7 +253,7 @@ func (a *App) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		respondDBOrConflict(w, r, err, "skill with that name already exists")
 		return
 	}
-	if err := a.recordSkillVersion(r.Context(), a.DB, id, "create", req.Name, req.Description, req.Body, extra, user.ID); err != nil {
+	if err := a.recordSkillVersion(r.Context(), tx, id, "create", req.Name, req.Description, req.Body, extra, user.ID); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
@@ -248,18 +261,23 @@ func (a *App) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	// version is its debut version), but still advance updated_at so listings
 	// re-sort. Subsequent additions bump major.
 	if priorSkillCount == 0 {
-		if err := a.touchPluginUpdatedAt(r.Context(), p.ID); err != nil {
+		if err := a.touchPluginUpdatedAt(r.Context(), tx, p.ID); err != nil {
 			serverErr(w, r, err, "db error")
 			return
 		}
 	} else {
-		if err := a.bumpAndPersistPluginVersion(r.Context(), p, semver.BumpMajor); err != nil {
+		if err := a.bumpAndPersistPluginVersion(r.Context(), tx, p, semver.BumpMajor); err != nil {
 			serverErr(w, r, err, "db error")
 			return
 		}
 	}
+	if err := tx.Commit(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed = true
 
-	if err := a.materializePlugin(r.Context(), p); err != nil {
+	if err := a.materializePluginDetached(p); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
@@ -297,7 +315,19 @@ func (a *App) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		extra = *req.ExtraFrontmatter
 	}
 
-	if _, err := a.DB.ExecContext(r.Context(), `
+	tx, err := a.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.ExecContext(r.Context(), `
 		UPDATE skills SET description = $1, body = $2, extra_frontmatter = $3,
 		                  updated_at = now(), updated_by = $4
 		WHERE id = $5
@@ -305,16 +335,21 @@ func (a *App) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.recordSkillVersion(r.Context(), a.DB, existing.ID, "update", existing.Name, req.Description, req.Body, extra, user.ID); err != nil {
+	if err := a.recordSkillVersion(r.Context(), tx, existing.ID, "update", existing.Name, req.Description, req.Body, extra, user.ID); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.bumpAndPersistPluginVersion(r.Context(), p, semver.BumpKindForSizeChange(len(existing.Body), len(req.Body))); err != nil {
+	if err := a.bumpAndPersistPluginVersion(r.Context(), tx, p, semver.BumpKindForSizeChange(len(existing.Body), len(req.Body))); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
+	if err := tx.Commit(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed = true
 
-	if err := a.materializePlugin(r.Context(), p); err != nil {
+	if err := a.materializePluginDetached(p); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
@@ -333,22 +368,40 @@ func (a *App) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := a.DB.ExecContext(r.Context(), `
+	tx, err := a.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.ExecContext(r.Context(), `
 		UPDATE skills SET deleted_at = now(), deleted_by = $1, updated_at = now(), updated_by = $1
 		WHERE id = $2
 	`, user.ID, existing.ID); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.recordSkillVersion(r.Context(), a.DB, existing.ID, "delete", existing.Name, existing.Description, existing.Body, existing.ExtraFrontmatter, user.ID); err != nil {
+	if err := a.recordSkillVersion(r.Context(), tx, existing.ID, "delete", existing.Name, existing.Description, existing.Body, existing.ExtraFrontmatter, user.ID); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.bumpAndPersistPluginVersion(r.Context(), p, semver.BumpMajor); err != nil {
+	if err := a.bumpAndPersistPluginVersion(r.Context(), tx, p, semver.BumpMajor); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.materializePlugin(r.Context(), p); err != nil {
+	if err := tx.Commit(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed = true
+
+	if err := a.materializePluginDetached(p); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
@@ -404,22 +457,40 @@ func (a *App) handleRestoreSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := a.DB.ExecContext(r.Context(), `
+	tx, err := a.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.ExecContext(r.Context(), `
 		UPDATE skills SET deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = $1
 		WHERE id = $2
 	`, user.ID, skillID); err != nil {
 		respondDBOrConflict(w, r, err, "an active skill with that name already exists")
 		return
 	}
-	if err := a.recordSkillVersion(r.Context(), a.DB, skillID, "restore", skillName, desc, body, extra, user.ID); err != nil {
+	if err := a.recordSkillVersion(r.Context(), tx, skillID, "restore", skillName, desc, body, extra, user.ID); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.bumpAndPersistPluginVersion(r.Context(), p, semver.BumpMajor); err != nil {
+	if err := a.bumpAndPersistPluginVersion(r.Context(), tx, p, semver.BumpMajor); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.materializePlugin(r.Context(), p); err != nil {
+	if err := tx.Commit(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed = true
+
+	if err := a.materializePluginDetached(p); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
@@ -494,6 +565,10 @@ func (a *App) handleListSkillVersions(w http.ResponseWriter, r *http.Request) {
 		}
 		versions = append(versions, v)
 	}
+	if err := rows.Err(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
 	writeJSON(w, http.StatusOK, versions)
 }
 
@@ -549,7 +624,19 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := a.DB.ExecContext(r.Context(), `
+	tx, err := a.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.ExecContext(r.Context(), `
 		UPDATE skills SET description = $1, body = $2, extra_frontmatter = $3,
 		                  updated_at = now(), updated_by = $4,
 		                  deleted_at = NULL, deleted_by = NULL
@@ -560,19 +647,25 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	// Restore the file tree from the snapshot before recording the new version,
 	// so the new "revert" version row captures the just-restored state.
-	if err := restoreSkillFilesFromVersion(r.Context(), a.DB, skillID, targetVersionID); err != nil {
+	if err := restoreSkillFilesFromVersion(r.Context(), tx, skillID, targetVersionID); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.recordSkillVersion(r.Context(), a.DB, skillID, "revert", skillName, targetDesc, targetBody, targetExtra, user.ID); err != nil {
+	if err := a.recordSkillVersion(r.Context(), tx, skillID, "revert", skillName, targetDesc, targetBody, targetExtra, user.ID); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.bumpAndPersistPluginVersion(r.Context(), p, semver.BumpKindForSizeChange(len(currentBody), len(targetBody))); err != nil {
+	if err := a.bumpAndPersistPluginVersion(r.Context(), tx, p, semver.BumpKindForSizeChange(len(currentBody), len(targetBody))); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.materializePlugin(r.Context(), p); err != nil {
+	if err := tx.Commit(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed = true
+
+	if err := a.materializePluginDetached(p); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}

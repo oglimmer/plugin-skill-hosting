@@ -105,6 +105,10 @@ func (a *App) handleMarketplaceJSON(w http.ResponseWriter, r *http.Request) {
 		}
 		doc.Plugins = append(doc.Plugins, mp)
 	}
+	if err := rows.Err(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

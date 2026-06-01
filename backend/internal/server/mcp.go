@@ -351,8 +351,19 @@ func (a *App) addToolCreateSkill(s *mcp.Server) {
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
 
+		tx, err := a.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, zero, fmt.Errorf("db error: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = tx.Rollback()
+			}
+		}()
+
 		var id string
-		err = a.DB.QueryRowContext(ctx, `
+		err = tx.QueryRowContext(ctx, `
 			INSERT INTO skills (plugin_id, name, description, body, created_by, updated_by)
 			VALUES ($1, $2, $3, $4, $5, $5) RETURNING id
 		`, p.ID, name, in.Description, in.Body, user.ID).Scan(&id)
@@ -362,19 +373,24 @@ func (a *App) addToolCreateSkill(s *mcp.Server) {
 			}
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
-		if err := a.recordSkillVersion(ctx, a.DB, id, "create", name, in.Description, in.Body, "", user.ID); err != nil {
+		if err := a.recordSkillVersion(ctx, tx, id, "create", name, in.Description, in.Body, "", user.ID); err != nil {
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
 		if priorSkillCount == 0 {
-			if err := a.touchPluginUpdatedAt(ctx, p.ID); err != nil {
+			if err := a.touchPluginUpdatedAt(ctx, tx, p.ID); err != nil {
 				return nil, zero, fmt.Errorf("db error: %w", err)
 			}
 		} else {
-			if err := a.bumpAndPersistPluginVersion(ctx, p, semver.BumpMajor); err != nil {
+			if err := a.bumpAndPersistPluginVersion(ctx, tx, p, semver.BumpMajor); err != nil {
 				return nil, zero, fmt.Errorf("db error: %w", err)
 			}
 		}
-		if err := a.materializePlugin(ctx, p); err != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, zero, fmt.Errorf("db error: %w", err)
+		}
+		committed = true
+
+		if err := a.materializePluginDetached(p); err != nil {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
 		metrics.SkillMutationsTotal.WithLabelValues("create", "success").Inc()
@@ -404,19 +420,35 @@ func (a *App) addToolUpdateSkill(s *mcp.Server) {
 		if err != nil {
 			return nil, zero, err
 		}
-		if _, err := a.DB.ExecContext(ctx, `
+		tx, err := a.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, zero, fmt.Errorf("db error: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = tx.Rollback()
+			}
+		}()
+
+		if _, err := tx.ExecContext(ctx, `
 			UPDATE skills SET description = $1, body = $2, updated_at = now(), updated_by = $3
 			WHERE id = $4
 		`, in.Description, in.Body, user.ID, existing.ID); err != nil {
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
-		if err := a.recordSkillVersion(ctx, a.DB, existing.ID, "update", existing.Name, in.Description, in.Body, existing.ExtraFrontmatter, user.ID); err != nil {
+		if err := a.recordSkillVersion(ctx, tx, existing.ID, "update", existing.Name, in.Description, in.Body, existing.ExtraFrontmatter, user.ID); err != nil {
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
-		if err := a.bumpAndPersistPluginVersion(ctx, p, semver.BumpKindForSizeChange(len(existing.Body), len(in.Body))); err != nil {
+		if err := a.bumpAndPersistPluginVersion(ctx, tx, p, semver.BumpKindForSizeChange(len(existing.Body), len(in.Body))); err != nil {
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
-		if err := a.materializePlugin(ctx, p); err != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, zero, fmt.Errorf("db error: %w", err)
+		}
+		committed = true
+
+		if err := a.materializePluginDetached(p); err != nil {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
 		metrics.SkillMutationsTotal.WithLabelValues("update", "success").Inc()
@@ -559,7 +591,18 @@ func (a *App) addToolUpsertSkillFile(s *mcp.Server) {
 			contentText = sql.NullString{String: string(data), Valid: true}
 		}
 
-		if _, err := a.DB.ExecContext(ctx, `
+		tx, err := a.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, zero, fmt.Errorf("db error: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = tx.Rollback()
+			}
+		}()
+
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO skill_files (skill_id, path, content_text, content_blob, is_binary, size_bytes)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (skill_id, path) DO UPDATE SET
@@ -571,13 +614,18 @@ func (a *App) addToolUpsertSkillFile(s *mcp.Server) {
 		`, sk.ID, pth, contentText, contentBlob, isBinary, len(data)); err != nil {
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
-		if err := a.recordSkillVersion(ctx, a.DB, sk.ID, "update", sk.Name, sk.Description, sk.Body, sk.ExtraFrontmatter, user.ID); err != nil {
+		if err := a.recordSkillVersion(ctx, tx, sk.ID, "update", sk.Name, sk.Description, sk.Body, sk.ExtraFrontmatter, user.ID); err != nil {
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
-		if err := a.bumpAndPersistPluginVersion(ctx, p, semver.BumpPatch); err != nil {
+		if err := a.bumpAndPersistPluginVersion(ctx, tx, p, semver.BumpPatch); err != nil {
 			return nil, zero, fmt.Errorf("db error: %w", err)
 		}
-		if err := a.materializePlugin(ctx, p); err != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, zero, fmt.Errorf("db error: %w", err)
+		}
+		committed = true
+
+		if err := a.materializePluginDetached(p); err != nil {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
 		metrics.SkillFileMutationsTotal.WithLabelValues("upsert", "success").Inc()

@@ -63,19 +63,26 @@ func (a *App) workPath(name string) string {
 	return filepath.Join(a.Cfg.DataDir, "work", name)
 }
 
-func runGit(dir string, args ...string) (string, error) {
-	return runGitInternal(dir, nil, args...)
+func runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	return runGitInternal(ctx, dir, nil, args...)
 }
 
 // runGitRedacted is like runGit but treats args as containing credentials:
 // the error message uses redactedArgs in place of args and the git stderr
 // is scrubbed before being returned.
-func runGitRedacted(dir string, redactedArgs []string, args ...string) (string, error) {
-	return runGitInternal(dir, redactedArgs, args...)
+func runGitRedacted(ctx context.Context, dir string, redactedArgs []string, args ...string) (string, error) {
+	return runGitInternal(ctx, dir, redactedArgs, args...)
 }
 
-func runGitInternal(dir string, redactedArgs []string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+// gitOpTimeout bounds any single git invocation so a hung clone/fetch/push
+// (e.g. an unreachable external remote) can't block a request goroutine or
+// shutdown forever, even when the caller's context never cancels on its own.
+const gitOpTimeout = 2 * time.Minute
+
+func runGitInternal(ctx context.Context, dir string, redactedArgs []string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -99,7 +106,7 @@ func runGitInternal(dir string, redactedArgs []string, args ...string) (string, 
 	return string(out), nil
 }
 
-func (a *App) ensureBareRepo(name string) error {
+func (a *App) ensureBareRepo(ctx context.Context, name string) error {
 	bare := a.repoPath(name)
 	if _, err := os.Stat(filepath.Join(bare, "HEAD")); err == nil {
 		return nil
@@ -107,19 +114,19 @@ func (a *App) ensureBareRepo(name string) error {
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		return err
 	}
-	if _, err := runGit("", "init", "--bare", "-b", "main", bare); err != nil {
+	if _, err := runGit(ctx, "", "init", "--bare", "-b", "main", bare); err != nil {
 		return err
 	}
-	if _, err := runGit(bare, "config", "http.receivepack", "false"); err != nil {
+	if _, err := runGit(ctx, bare, "config", "http.receivepack", "false"); err != nil {
 		return err
 	}
-	if _, err := runGit(bare, "config", "http.uploadpack", "true"); err != nil {
+	if _, err := runGit(ctx, bare, "config", "http.uploadpack", "true"); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (a *App) ensureWorkTree(name string) error {
+func (a *App) ensureWorkTree(ctx context.Context, name string) error {
 	work := a.workPath(name)
 	bare := a.repoPath(name)
 	if _, err := os.Stat(filepath.Join(work, ".git")); err == nil {
@@ -128,10 +135,10 @@ func (a *App) ensureWorkTree(name string) error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
-	if _, err := runGit(work, "init", "-b", "main"); err != nil {
+	if _, err := runGit(ctx, work, "init", "-b", "main"); err != nil {
 		return err
 	}
-	if _, err := runGit(work, "remote", "add", "origin", bare); err != nil {
+	if _, err := runGit(ctx, work, "remote", "add", "origin", bare); err != nil {
 		return err
 	}
 	return nil
@@ -165,11 +172,29 @@ func (a *App) materializePlugin(ctx context.Context, p *Plugin) error {
 	return err
 }
 
+// materializeTimeout bounds a single post-commit git rebuild. Generous because
+// a rebuild runs several git ops (each already capped by gitOpTimeout) plus an
+// optional external push; the cap only exists so the detached work can't run
+// forever.
+const materializeTimeout = 5 * time.Minute
+
+// materializePluginDetached rebuilds a plugin's git repo on a context that is
+// independent of the caller's request/MCP context. Use this for the
+// materialization that happens AFTER a DB transaction commits: the DB change is
+// already durable, so a client disconnect or tool-call timeout must not be able
+// to abort the git rebuild and leave /git/... and marketplace.json diverged
+// from the database. The bounded timeout still guarantees forward progress.
+func (a *App) materializePluginDetached(p *Plugin) error {
+	ctx, cancel := context.WithTimeout(context.Background(), materializeTimeout)
+	defer cancel()
+	return a.materializePlugin(ctx, p)
+}
+
 func (a *App) materializePluginInner(ctx context.Context, p *Plugin) error {
-	if err := a.ensureBareRepo(p.Name); err != nil {
+	if err := a.ensureBareRepo(ctx, p.Name); err != nil {
 		return err
 	}
-	if err := a.ensureWorkTree(p.Name); err != nil {
+	if err := a.ensureWorkTree(ctx, p.Name); err != nil {
 		return err
 	}
 	work := a.workPath(p.Name)
@@ -181,20 +206,20 @@ func (a *App) materializePluginInner(ctx context.Context, p *Plugin) error {
 		return err
 	}
 
-	if _, err := runGit(work, "add", "-A"); err != nil {
+	if _, err := runGit(ctx, work, "add", "-A"); err != nil {
 		return err
 	}
-	out, err := runGit(work, "status", "--porcelain")
+	out, err := runGit(ctx, work, "status", "--porcelain")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(out) == "" {
 		return a.syncExternalPushPlugin(ctx, p)
 	}
-	if _, err := runGit(work, "commit", "-m", "Update plugin contents"); err != nil {
+	if _, err := runGit(ctx, work, "commit", "-m", "Update plugin contents"); err != nil {
 		return err
 	}
-	if _, err := runGit(work, "push", "origin", "HEAD:refs/heads/main", "--force"); err != nil {
+	if _, err := runGit(ctx, work, "push", "origin", "HEAD:refs/heads/main", "--force"); err != nil {
 		return err
 	}
 	return a.syncExternalPushPlugin(ctx, p)
@@ -328,6 +353,11 @@ func buildSkillMarkdown(s Skill) string {
 // the database. It is intended to be called in a background goroutine on
 // startup when the data dir is ephemeral (REMATERIALIZE_ON_STARTUP=true).
 func (a *App) RematerializeAll(ctx context.Context) {
+	// Always flip readiness on the way out: a failure to list or rebuild must
+	// not leave /readyz wedged at false until a restart. Individual plugin
+	// failures are logged below; the process is still able to serve traffic.
+	defer a.MarkReady()
+
 	plugins, err := a.queryPlugins(ctx, `WHERE p.deleted_at IS NULL`)
 	if err != nil {
 		log.Printf("rematerialize: list plugins: %v", err)
@@ -341,7 +371,6 @@ func (a *App) RematerializeAll(ctx context.Context) {
 		}
 	}
 	log.Printf("rematerialize: done in %s", time.Since(start).Round(time.Millisecond))
-	a.MarkReady()
 }
 
 func (a *App) gitHandler() http.Handler {

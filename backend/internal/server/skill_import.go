@@ -464,25 +464,24 @@ func (a *App) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 		serverErr(w, r, err, "db error")
 		return
 	}
+	if priorSkillCount == 0 {
+		if err := a.touchPluginUpdatedAt(r.Context(), tx, p.ID); err != nil {
+			serverErr(w, r, err, "db error")
+			return
+		}
+	} else {
+		if err := a.bumpAndPersistPluginVersion(r.Context(), tx, p, semver.BumpMajor); err != nil {
+			serverErr(w, r, err, "db error")
+			return
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		serverErr(w, r, err, "db error")
 		return
 	}
 	committed = true
 
-	if priorSkillCount == 0 {
-		if err := a.touchPluginUpdatedAt(r.Context(), p.ID); err != nil {
-			serverErr(w, r, err, "db error")
-			return
-		}
-	} else {
-		if err := a.bumpAndPersistPluginVersion(r.Context(), p, semver.BumpMajor); err != nil {
-			serverErr(w, r, err, "db error")
-			return
-		}
-	}
-
-	if err := a.materializePlugin(r.Context(), p); err != nil {
+	if err := a.materializePluginDetached(p); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -501,11 +502,13 @@ func (a *App) loadAndDeleteOAuthPending(ctx context.Context, stateKey string) (*
 // successful exchange/rotation, but abandoned flows (user closes the tab,
 // client crashes) leave dead rows that the `expires_at > now()` guards keep
 // out of use but never remove. No-op when OAuth is not configured.
-func (a *App) StartOAuthGC(ctx context.Context) {
+func (a *App) StartOAuthGC(ctx context.Context, wg *sync.WaitGroup) {
 	if a.Cfg.MCPOAuthClientID == "" {
 		return
 	}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for {

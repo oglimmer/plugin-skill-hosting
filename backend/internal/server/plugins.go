@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"marketplace/internal/db"
 	"marketplace/internal/metrics"
 	"marketplace/internal/semver"
 )
@@ -77,7 +78,7 @@ func (a *App) queryPlugins(ctx context.Context, where string, args ...interface{
 		}
 		plugins = append(plugins, p)
 	}
-	return plugins, nil
+	return plugins, rows.Err()
 }
 
 func (a *App) handleListPlugins(w http.ResponseWriter, r *http.Request) {
@@ -148,11 +149,13 @@ func (a *App) loadActivePluginOrRespond(w http.ResponseWriter, r *http.Request) 
 }
 
 // bumpAndPersistPluginVersion bumps p.Version in-memory and writes the new
-// value (plus updated_at) to the row. The in-memory bump is what
+// value (plus updated_at) to the row via exec, which may be a *sql.DB or a
+// *sql.Tx — callers that batch this with other writes pass the transaction so
+// the bump commits atomically with them. The in-memory bump is what
 // materializePlugin reads when it regenerates the git repo.
-func (a *App) bumpAndPersistPluginVersion(ctx context.Context, p *Plugin, kind semver.BumpKind) error {
+func (a *App) bumpAndPersistPluginVersion(ctx context.Context, exec db.Exec, p *Plugin, kind semver.BumpKind) error {
 	p.Version = semver.Bump(p.Version, kind)
-	_, err := a.DB.ExecContext(ctx,
+	_, err := exec.ExecContext(ctx,
 		`UPDATE plugins SET version = $1, updated_at = now() WHERE id = $2`, p.Version, p.ID)
 	return err
 }
@@ -160,9 +163,9 @@ func (a *App) bumpAndPersistPluginVersion(ctx context.Context, p *Plugin, kind s
 // touchPluginUpdatedAt advances the plugin's updated_at without changing the
 // version. Used when a skill change happens that the version-bump rules
 // exempt (e.g. the very first skill added to a plugin) but the listing-sort
-// timestamp should still reflect the activity.
-func (a *App) touchPluginUpdatedAt(ctx context.Context, pluginID string) error {
-	_, err := a.DB.ExecContext(ctx,
+// timestamp should still reflect the activity. exec may be a transaction.
+func (a *App) touchPluginUpdatedAt(ctx context.Context, exec db.Exec, pluginID string) error {
+	_, err := exec.ExecContext(ctx,
 		`UPDATE plugins SET updated_at = now() WHERE id = $1`, pluginID)
 	return err
 }
@@ -227,7 +230,7 @@ func (a *App) handleCreatePlugin(w http.ResponseWriter, r *http.Request) {
 
 	p, _ := a.loadPluginByName(r.Context(), req.Name)
 	if p != nil {
-		if err := a.materializePlugin(r.Context(), p); err != nil {
+		if err := a.materializePluginDetached(p); err != nil {
 			writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 			return
 		}
@@ -275,7 +278,7 @@ func (a *App) handleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.materializePlugin(r.Context(), updated); err != nil {
+	if err := a.materializePluginDetached(updated); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
@@ -350,7 +353,7 @@ func (a *App) handleRestorePlugin(w http.ResponseWriter, r *http.Request) {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	if err := a.materializePlugin(r.Context(), restored); err != nil {
+	if err := a.materializePluginDetached(restored); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}

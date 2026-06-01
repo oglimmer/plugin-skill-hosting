@@ -147,7 +147,7 @@ func (a *App) loadSkillFiles(ctx context.Context, skillID string) ([]SkillFile, 
 		}
 		out = append(out, f)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // loadSkillFileSummaries returns paths + metadata for a skill, used by the
@@ -169,7 +169,7 @@ func (a *App) loadSkillFileSummaries(ctx context.Context, skillID string) ([]Ski
 		}
 		out = append(out, f)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // loadSingleSkillFile fetches one file by path; sql.ErrNoRows if absent.
@@ -320,7 +320,19 @@ func (a *App) handleUpsertSkillFile(w http.ResponseWriter, r *http.Request) {
 		contentText = sql.NullString{String: string(data), Valid: true}
 	}
 
-	if _, err := a.DB.ExecContext(r.Context(), `
+	tx, err := a.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.ExecContext(r.Context(), `
 		INSERT INTO skill_files (skill_id, path, content_text, content_blob, is_binary, size_bytes)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (skill_id, path) DO UPDATE SET
@@ -333,16 +345,21 @@ func (a *App) handleUpsertSkillFile(w http.ResponseWriter, r *http.Request) {
 		serverErr(w, r, err, "db error")
 		return
 	}
+	if err := a.recordSkillVersion(r.Context(), tx, s.ID, "update", s.Name, s.Description, s.Body, s.ExtraFrontmatter, user.ID); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	if err := a.bumpAndPersistPluginVersion(r.Context(), tx, p, semver.BumpPatch); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed = true
 
-	if err := a.recordSkillVersion(r.Context(), a.DB, s.ID, "update", s.Name, s.Description, s.Body, s.ExtraFrontmatter, user.ID); err != nil {
-		serverErr(w, r, err, "db error")
-		return
-	}
-	if err := a.bumpAndPersistPluginVersion(r.Context(), p, semver.BumpPatch); err != nil {
-		serverErr(w, r, err, "db error")
-		return
-	}
-	if err := a.materializePlugin(r.Context(), p); err != nil {
+	if err := a.materializePluginDetached(p); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}
@@ -372,7 +389,19 @@ func (a *App) handleDeleteSkillFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := a.DB.ExecContext(r.Context(),
+	tx, err := a.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	res, err := tx.ExecContext(r.Context(),
 		`DELETE FROM skill_files WHERE skill_id = $1 AND path = $2`, s.ID, pth)
 	if err != nil {
 		serverErr(w, r, err, "db error")
@@ -382,16 +411,21 @@ func (a *App) handleDeleteSkillFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return
 	}
+	if err := a.recordSkillVersion(r.Context(), tx, s.ID, "update", s.Name, s.Description, s.Body, s.ExtraFrontmatter, user.ID); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	if err := a.bumpAndPersistPluginVersion(r.Context(), tx, p, semver.BumpPatch); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	committed = true
 
-	if err := a.recordSkillVersion(r.Context(), a.DB, s.ID, "update", s.Name, s.Description, s.Body, s.ExtraFrontmatter, user.ID); err != nil {
-		serverErr(w, r, err, "db error")
-		return
-	}
-	if err := a.bumpAndPersistPluginVersion(r.Context(), p, semver.BumpPatch); err != nil {
-		serverErr(w, r, err, "db error")
-		return
-	}
-	if err := a.materializePlugin(r.Context(), p); err != nil {
+	if err := a.materializePluginDetached(p); err != nil {
 		writeErr(w, http.StatusInternalServerError, "git materialize: "+err.Error())
 		return
 	}

@@ -8,6 +8,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"marketplace/internal/metrics"
@@ -56,7 +57,7 @@ type auditTarget struct {
 // if the most recent stored audit is older than one interval (or none exists),
 // so frequent restarts don't re-audit on every launch; otherwise it waits for
 // the next tick. Mirrors the StartOAuthGC pattern.
-func (a *App) StartSkillAudit(ctx context.Context) {
+func (a *App) StartSkillAudit(ctx context.Context, wg *sync.WaitGroup) {
 	if !a.Cfg.AuditEnabled {
 		return
 	}
@@ -67,7 +68,9 @@ func (a *App) StartSkillAudit(ctx context.Context) {
 	log.Printf("skill audit enabled: interval=%s threshold=%d recipients=%d",
 		a.Cfg.AuditInterval, a.Cfg.AuditThreshold, len(a.Cfg.AuditAlertEmails))
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		if a.auditDueAtStartup(ctx) {
 			a.auditAllSkills(ctx, "scheduled")
 		}

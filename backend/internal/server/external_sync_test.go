@@ -128,7 +128,7 @@ func TestExternalSync_PushAndDelete_EndToEnd(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()
 	bare := filepath.Join(root, "remote.git")
-	if _, err := runGit("", "init", "--bare", "-b", "main", bare); err != nil {
+	if _, err := runGit(context.Background(), "", "init", "--bare", "-b", "main", bare); err != nil {
 		t.Fatalf("init bare: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func TestExternalSync_PushAndDelete_EndToEnd(t *testing.T) {
 	// Clone the bare repo into a separate verification dir and verify both
 	// plugin subdirs are present at HEAD.
 	verifyDir := filepath.Join(root, "verify")
-	if _, err := runGit("", "clone", bare, verifyDir); err != nil {
+	if _, err := runGit(ctx, "", "clone", bare, verifyDir); err != nil {
 		t.Fatalf("verify clone: %v", err)
 	}
 	for _, name := range []string{"alpha", "beta"} {
@@ -183,7 +183,7 @@ func TestExternalSync_PushAndDelete_EndToEnd(t *testing.T) {
 	if err := es.deletePlugin(ctx, "alpha"); err != nil {
 		t.Fatalf("deletePlugin: %v", err)
 	}
-	if _, err := runGit(verifyDir, "pull", "--rebase"); err != nil {
+	if _, err := runGit(ctx, verifyDir, "pull", "--rebase"); err != nil {
 		t.Fatalf("verify pull: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(verifyDir, "plugins", "alpha")); !os.IsNotExist(err) {
@@ -204,29 +204,30 @@ func TestExternalSync_PushAndDelete_EndToEnd(t *testing.T) {
 func TestExternalSync_InitializeOnExistingClone(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()
+	ctx := context.Background()
 	bare := filepath.Join(root, "remote.git")
-	if _, err := runGit("", "init", "--bare", "-b", "main", bare); err != nil {
+	if _, err := runGit(ctx, "", "init", "--bare", "-b", "main", bare); err != nil {
 		t.Fatalf("init bare: %v", err)
 	}
 
 	// Seed remote with an initial commit so cloning succeeds.
 	seed := filepath.Join(root, "seed")
-	if _, err := runGit("", "init", "-b", "main", seed); err != nil {
+	if _, err := runGit(ctx, "", "init", "-b", "main", seed); err != nil {
 		t.Fatalf("init seed: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(seed, "hello"), []byte("hi"), 0o644); err != nil {
 		t.Fatalf("seed file: %v", err)
 	}
-	if _, err := runGit(seed, "add", "-A"); err != nil {
+	if _, err := runGit(ctx, seed, "add", "-A"); err != nil {
 		t.Fatalf("seed add: %v", err)
 	}
-	if _, err := runGit(seed, "commit", "-m", "seed"); err != nil {
+	if _, err := runGit(ctx, seed, "commit", "-m", "seed"); err != nil {
 		t.Fatalf("seed commit: %v", err)
 	}
-	if _, err := runGit(seed, "remote", "add", "origin", bare); err != nil {
+	if _, err := runGit(ctx, seed, "remote", "add", "origin", bare); err != nil {
 		t.Fatalf("seed remote: %v", err)
 	}
-	if _, err := runGit(seed, "push", "origin", "main"); err != nil {
+	if _, err := runGit(ctx, seed, "push", "origin", "main"); err != nil {
 		t.Fatalf("seed push: %v", err)
 	}
 
