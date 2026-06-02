@@ -60,6 +60,8 @@ spec:
           value: {{ .Values.marketplaceName | default "oglimmer-marketplace" | quote }}
         - name: DEFAULT_LICENSE
           value: {{ .Values.defaultLicense | default "MIT" | quote }}
+        - name: ENTERPRISE_MODE
+          value: {{ .Values.enterpriseMode | default false | quote }}
         {{- if .Values.postgres.enabled }}
         - name: POSTGRES_USER
           value: {{ .Values.postgres.user | quote }}

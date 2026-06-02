@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { errMsg } from '../api'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import { useAuthStore } from '../stores/auth'
@@ -22,6 +22,10 @@ const sessionError = ref('')
 const revoking = ref(false)
 const copied = ref('')
 const activeTab = ref<'plugins' | 'connect'>('plugins')
+// In an enterprise deployment the connect tab leads with team-managed rollout
+// guidance; expertMode reveals the per-user personal-token setup on demand.
+// Ignored when auth.enterpriseMode is false (the personal setup shows directly).
+const expertMode = ref(false)
 
 function fmt(d?: string | null) {
   if (!d) return ''
@@ -57,12 +61,71 @@ const mcpJsonConfig = computed(() => JSON.stringify({
   },
 }, null, 2))
 
+// ─── Enterprise / team walkthrough ──────────────────────────────────
+// Screenshots live in src/assets/enterprise/ (step-1…step-4); import.meta.glob
+// resolves whatever is present, so a missing file never breaks the build and a
+// new screenshot shows up the moment it's dropped in.
+const shotUrls = import.meta.glob('../assets/enterprise/*.{png,jpg,jpeg,webp}', {
+  eager: true,
+  import: 'default',
+}) as Record<string, string>
+function shot(file: string): string | undefined {
+  return shotUrls[`../assets/enterprise/${file}`]
+}
+
+// The flow a team member sees in the Claude app: your org has already connected
+// this marketplace, so the plugins, skills and MCP server are just there — these
+// steps show where to find them. Nothing to install or paste.
+const steps = [
+  {
+    img: 'step-1.png',
+    title: 'open Customize from Chat',
+    body: 'in the Claude app, open the left sidebar and click Customize. this is ' +
+      'where your team\'s plugins, skills and connectors live.',
+    note: '',
+  },
+  {
+    img: 'step-2.png',
+    title: '…or from Cowork',
+    body: 'the same Customize panel is reachable from Cowork too — so you can get ' +
+      'to your team\'s tools from wherever you\'re working.',
+    note: '',
+  },
+  {
+    img: 'step-3.png',
+    title: 'the MCP connector is already there',
+    body: 'under Connectors you\'ll find this marketplace\'s server already ' +
+      'connected. it lets Claude read plugins and create or update skills — the ' +
+      'tool permissions are listed so you can see exactly what it can do.',
+    note: '',
+  },
+  {
+    img: 'step-4.png',
+    title: 'your skills are ready to use',
+    body: 'under Skills, the skills from your organization\'s plugins show up ' +
+      'automatically — pick one to see its description and trigger, and it\'s live ' +
+      'right away.',
+    note: 'skills run in Cowork and Code — not in Chat.',
+  },
+] as const
+
+// Click-to-enlarge lightbox. Esc or a backdrop click closes it.
+const lightbox = ref<string | null>(null)
+function openShot(src?: string) { if (src) lightbox.value = src }
+function closeShot() { lightbox.value = null }
+function onLightboxKey(e: KeyboardEvent) {
+  if (lightbox.value && e.key === 'Escape') { e.preventDefault(); closeShot() }
+}
+onMounted(() => window.addEventListener('keydown', onLightboxKey))
+onUnmounted(() => window.removeEventListener('keydown', onLightboxKey))
+
 let initialLoad = true
 async function load() {
   loading.value = true
   error.value = ''
   try {
     await Promise.all([
+      auth.ensureMode(),
       pluginStore.loadList(),
       auth.user ? pluginStore.loadDeleted() : Promise.resolve(),
     ])
@@ -237,6 +300,59 @@ onMounted(load)
 
     <!-- CONNECT tab -->
     <section v-show="activeTab === 'connect'" role="tabpanel">
+      <!-- ENTERPRISE: team-managed rollout (default when enterprise mode is on) -->
+      <template v-if="auth.enterpriseMode && !expertMode">
+        <p class="pl-lead">
+          your admin connects this marketplace once at the <strong>organization</strong>
+          level, so its plugins, skills and MCP server just show up in everyone's Claude —
+          there's nothing to install. here's where to find them (click any screenshot to
+          enlarge):
+        </p>
+
+        <ol class="pl-steps">
+          <li v-for="(s, i) in steps" :key="s.img" class="pl-step">
+            <span class="pl-step__num">{{ i + 1 }}</span>
+            <div class="pl-step__main">
+              <h4 class="pl-step__title">{{ s.title }}</h4>
+              <p class="pl-step__body">{{ s.body }}</p>
+              <p v-if="s.note" class="pl-step__note">
+                <span class="pl-step__note-tag">heads up</span>{{ s.note }}
+              </p>
+            </div>
+
+            <button
+              v-if="shot(s.img)"
+              type="button"
+              class="pl-shot"
+              :aria-label="`enlarge screenshot: ${s.title}`"
+              @click="openShot(shot(s.img))"
+            >
+              <img :src="shot(s.img)" :alt="s.title" class="pl-shot__img" loading="lazy" />
+              <span class="pl-shot__zoom" aria-hidden="true">⤢ enlarge</span>
+            </button>
+            <div v-else class="pl-shot pl-shot--empty" aria-hidden="true">
+              <span class="pl-shot__ph">{{ s.img }}</span>
+            </div>
+          </li>
+        </ol>
+
+        <div class="pl-expert-cta">
+          <button type="button" class="pl-btn" @click="expertMode = true">
+            expert mode — set up with my personal token →
+          </button>
+          <span class="pl-expert-cta__hint">for individual use outside the managed fleet</span>
+        </div>
+      </template>
+
+      <!-- PERSONAL TOKEN setup: always shown outside enterprise mode; behind the
+           expert-mode toggle when enterprise mode is on. -->
+      <template v-else>
+      <div v-if="auth.enterpriseMode" class="pl-expert-bar">
+        <span class="pl-expert-bar__label">expert mode · personal-token setup</span>
+        <span class="spacer"></span>
+        <button type="button" class="pl-btn" @click="expertMode = false">← team setup</button>
+      </div>
+
       <div class="pl-block">
         <header class="pl-block__head">
           <span class="pl-block__title">marketplace install</span>
@@ -356,7 +472,25 @@ onMounted(load)
           </div>
         </details>
       </div>
+      </template>
     </section>
+
+    <!-- Click-to-enlarge lightbox for the walkthrough screenshots -->
+    <Teleport to="body">
+      <Transition name="pl-lb">
+        <div
+          v-if="lightbox"
+          class="pl-lb"
+          role="dialog"
+          aria-modal="true"
+          aria-label="enlarged screenshot"
+          @mousedown.self="closeShot"
+        >
+          <img :src="lightbox" alt="" class="pl-lb__img" />
+          <button type="button" class="pl-lb__close" aria-label="close" @click="closeShot">✕</button>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -581,6 +715,211 @@ onMounted(load)
   margin: 0;
 }
 
+/* ─── Enterprise / team-managed setup ──────────────────────────── */
+.pl-lead {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-soft);
+}
+.pl-lead strong { color: var(--text); font-weight: 600; }
+
+.pl-expert-cta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.pl-expert-cta__hint {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.pl-expert-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 24px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-2);
+}
+.pl-expert-bar__label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
+/* ─── Numbered walkthrough steps ───────────────────────────────── */
+.pl-steps {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  counter-reset: none;
+}
+.pl-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 240px;
+  gap: 16px;
+  align-items: start;
+  padding: 22px 0;
+  border-top: 1px solid var(--border-soft);
+}
+.pl-step:first-child { border-top: 0; padding-top: 6px; }
+.pl-step__num {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.pl-step__main { min-width: 0; }
+.pl-step__title {
+  margin: 2px 0 6px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.pl-step__body {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+.pl-step__note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-soft);
+}
+.pl-step__note-tag {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* Screenshot thumbnail (button so it's keyboard-focusable) */
+.pl-shot {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: zoom-in;
+  overflow: hidden;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.pl-shot:hover { border-color: var(--accent); }
+.pl-shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pl-shot__img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  object-fit: cover;
+  object-position: top center;
+}
+.pl-shot__zoom {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 2px 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.pl-shot:hover .pl-shot__zoom,
+.pl-shot:focus-visible .pl-shot__zoom { opacity: 1; }
+.pl-shot--empty {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  border-style: dashed;
+  background: var(--bg-2);
+  cursor: default;
+}
+.pl-shot__ph {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+/* ─── Lightbox ─────────────────────────────────────────────────── */
+.pl-lb {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgb(var(--shadow-rgb) / 0.7);
+  -webkit-backdrop-filter: blur(3px);
+          backdrop-filter: blur(3px);
+  cursor: zoom-out;
+}
+.pl-lb__img {
+  max-width: min(1100px, 94vw);
+  max-height: 90vh;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--border);
+  box-shadow: 0 24px 80px rgb(var(--shadow-rgb) / 0.4);
+  cursor: default;
+}
+.pl-lb__close {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.pl-lb__close:hover { color: var(--accent); border-color: var(--accent); }
+.pl-lb-enter-active,
+.pl-lb-leave-active { transition: opacity 0.14s ease; }
+.pl-lb-enter-from,
+.pl-lb-leave-to { opacity: 0; }
+
 /* ─── Connect blocks ───────────────────────────────────────────── */
 .pl-block {
   margin: 0 0 28px;
@@ -788,5 +1127,15 @@ onMounted(load)
   .pl-tab { padding: 10px 12px; }
   .pl-block { padding-left: 12px; }
   .pl-code pre { padding: 10px 12px 10px 18px; font-size: 12px; }
+  /* Stack each step: number + text, then the screenshot full width below. */
+  .pl-step {
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 10px 12px;
+  }
+  .pl-shot,
+  .pl-shot--empty {
+    grid-column: 1 / -1;
+  }
+  .pl-shot__img { max-height: 260px; }
 }
 </style>

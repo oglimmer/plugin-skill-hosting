@@ -533,6 +533,7 @@ type authConfigResp struct {
 	MarketplaceName      string `json:"marketplaceName"`
 	DefaultLicense       string `json:"defaultLicense"`
 	UserApprovalRequired bool   `json:"userApprovalRequired"`
+	EnterpriseMode       bool   `json:"enterpriseMode"`
 }
 
 func (a *App) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
@@ -541,5 +542,6 @@ func (a *App) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 		MarketplaceName:      a.Cfg.MarketplaceName,
 		DefaultLicense:       a.Cfg.DefaultLicense,
 		UserApprovalRequired: a.Cfg.RequiresUserApproval(),
+		EnterpriseMode:       a.Cfg.EnterpriseMode,
 	})
 }

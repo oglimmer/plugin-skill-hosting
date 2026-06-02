@@ -44,6 +44,12 @@ marketplaceName: "oglimmer-marketplace"
 # Default license prefilled in the "new plugin" form.
 defaultLicense: "MIT"
 
+# Enterprise team rollout (presentation only). When true, the connect UI leads
+# with how an admin distributes the marketplace / plugins / MCP server via
+# Claude Code managed settings; the per-user personal-token setup moves behind
+# an "expert mode" toggle.
+enterpriseMode: false
+
 # Anthropic / Claude API integration. The API key itself goes into the sealed
 # secret under the ANTHROPIC_API_KEY key; only the model id is set here.
 anthropic:

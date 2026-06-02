@@ -27,6 +27,9 @@ const error = ref('')
 const loadErrorCode = ref<number | null>(null)
 const copied = ref('')
 const activeTab = ref<'skills' | 'connect'>('skills')
+// In enterprise mode the manual install command is tucked behind expert mode,
+// since plugins are normally enabled fleet-wide via managed settings.
+const expertMode = ref(false)
 
 const editing = ref(false)
 const saving = ref(false)
@@ -300,7 +303,24 @@ watch(() => route.params.name, load)
 
     <!-- CONNECT & META tab -->
     <section v-show="activeTab === 'connect'" role="tabpanel">
-      <div class="pd-block">
+      <!-- ENTERPRISE: plugins ship via managed settings; manual install is expert-only -->
+      <div v-if="auth.enterpriseMode && !expertMode" class="pd-block">
+        <header class="pd-block__head">
+          <span class="pd-block__title">install</span>
+        </header>
+        <p class="pd-block__body">
+          this plugin is rolled out to your team automatically through claude code
+          managed settings — there's nothing to install by hand. see the
+          <RouterLink to="/">Plugins page</RouterLink> for the team setup snippets.
+        </p>
+        <div class="pd-code-actions">
+          <button type="button" class="pd-btn" @click="expertMode = true">
+            expert mode — show manual install command →
+          </button>
+        </div>
+      </div>
+
+      <div v-else class="pd-block">
         <header class="pd-block__head">
           <span class="pd-block__title">install command</span>
         </header>
@@ -314,6 +334,12 @@ watch(() => route.params.name, load)
           <button type="button" class="pd-btn" @click="copy(installCmd, 'cmd')">
             {{ copied === 'cmd' ? '✓ copied' : 'copy command' }}
           </button>
+          <button
+            v-if="auth.enterpriseMode"
+            type="button"
+            class="pd-btn"
+            @click="expertMode = false"
+          >← team setup</button>
         </div>
       </div>
 

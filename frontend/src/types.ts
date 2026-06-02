@@ -93,6 +93,10 @@ export interface AuthConfig {
   marketplaceName: string
   defaultLicense: string
   userApprovalRequired: boolean
+  // When true the deployment is configured for enterprise team rollout, so the
+  // connect UI leads with managed-settings guidance and tucks the per-user
+  // personal-token setup behind an "expert mode" toggle.
+  enterpriseMode: boolean
 }
 
 export interface BackendBuildInfo {

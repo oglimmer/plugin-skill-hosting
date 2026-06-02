@@ -13,6 +13,7 @@ export const useAuthStore = defineStore('auth', () => {
   const marketplaceName = ref<string>('')
   const defaultLicense = ref<string>('MIT')
   const userApprovalRequired = ref<boolean>(false)
+  const enterpriseMode = ref<boolean>(false)
   // The active UI theme. Seeded from localStorage (already applied to <html> in
   // main.ts) and reconciled with the server preference once a user loads.
   const theme = ref<string>(getStoredTheme())
@@ -109,6 +110,7 @@ export const useAuthStore = defineStore('auth', () => {
         marketplaceName.value = c.marketplaceName
         defaultLicense.value = c.defaultLicense
         userApprovalRequired.value = c.userApprovalRequired
+        enterpriseMode.value = c.enterpriseMode
         return c.mode
       }).catch((e) => {
         // Don't cache a transient failure: clear the promise so a later caller
@@ -209,7 +211,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    user, token, mode, marketplaceName, defaultLicense, userApprovalRequired, theme,
+    user, token, mode, marketplaceName, defaultLicense, userApprovalRequired, enterpriseMode, theme,
     ensureMode, ensureFreshUser, login, register, loginViaOIDC, logout, doLogout, setSession,
     refreshUser, regenerateToken, signOutEverywhere, setTheme,
   }

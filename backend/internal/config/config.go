@@ -47,6 +47,14 @@ type Config struct {
 	MarketplaceName string
 	DefaultLicense  string
 
+	// EnterpriseMode flips the "connect" UI from a per-user, personal-token
+	// setup to a team-managed one: the Connect tab and a plugin's connect info
+	// lead with how an admin rolls the marketplace / plugins / MCP server out
+	// via Claude Code managed settings, and the per-user token instructions move
+	// behind an "expert mode" toggle. Purely presentational — it changes no auth
+	// or capability, so it's safe to expose to the unauthenticated config call.
+	EnterpriseMode bool
+
 	AuthMode string // "password" (default) or "oidc"
 
 	OIDCIssuerURL    string
@@ -132,6 +140,8 @@ func Load() Config {
 
 		MarketplaceName: getenv("MARKETPLACE_NAME", "oglimmer-marketplace"),
 		DefaultLicense:  getenv("DEFAULT_LICENSE", "MIT"),
+
+		EnterpriseMode: getenv("ENTERPRISE_MODE", "false") == "true",
 
 		AuthMode: strings.ToLower(getenv("AUTH_MODE", "password")),
 

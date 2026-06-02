@@ -30,6 +30,8 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       MARKETPLACE_NAME: ${MARKETPLACE_NAME:-oglimmer-marketplace}
       DEFAULT_LICENSE: ${DEFAULT_LICENSE:-MIT}
+      # Team rollout: lead the connect UI with managed-settings guidance.
+      ENTERPRISE_MODE: ${ENTERPRISE_MODE:-false}
       # Auth: "password" (default, dev) or "oidc"
       AUTH_MODE: ${AUTH_MODE:-password}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}

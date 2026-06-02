@@ -103,6 +103,7 @@ describe('auth store', () => {
       marketplaceName: 'mp',
       defaultLicense: 'MIT',
       userApprovalRequired: false,
+      enterpriseMode: false,
     })
     const s = useAuthStore()
     await s.ensureMode()
@@ -119,6 +120,7 @@ describe('auth store', () => {
       marketplaceName: 'mp',
       defaultLicense: 'MIT',
       userApprovalRequired: false,
+      enterpriseMode: false,
     })
     const s = useAuthStore()
     await s.ensureMode()
@@ -131,6 +133,7 @@ describe('auth store', () => {
       marketplaceName: 'mp',
       defaultLicense: 'MIT',
       userApprovalRequired: true,
+      enterpriseMode: false,
     })
     // jsdom's window.location is read-only by default; assign via Object.defineProperty.
     const setHref = vi.fn()
@@ -158,6 +161,7 @@ describe('auth store', () => {
       marketplaceName: 'mp',
       defaultLicense: 'MIT',
       userApprovalRequired: false,
+      enterpriseMode: false,
     })
     const s = useAuthStore()
     const m1 = await s.ensureMode()
@@ -176,6 +180,7 @@ describe('auth store', () => {
         marketplaceName: 'mp',
         defaultLicense: 'MIT',
         userApprovalRequired: false,
+        enterpriseMode: false,
       })
     const s = useAuthStore()
     await expect(s.ensureMode()).rejects.toThrow('network blip')
@@ -256,6 +261,7 @@ describe('auth store', () => {
       marketplaceName: 'mp',
       defaultLicense: 'MIT',
       userApprovalRequired: false,
+      enterpriseMode: false,
     })
     vi.mocked(api.revokeSessions).mockResolvedValue()
     localStorage.setItem('token', 't')
