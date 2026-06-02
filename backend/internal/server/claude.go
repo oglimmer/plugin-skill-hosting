@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,10 +18,74 @@ import (
 	"marketplace/internal/skillvalidation"
 )
 
+// claudeAPIURL is a var (not a const) only so tests can point callClaude at a
+// mock server; production code never reassigns it.
+var claudeAPIURL = "https://api.anthropic.com/v1/messages"
+
 const (
-	claudeAPIURL     = "https://api.anthropic.com/v1/messages"
 	claudeAPIVersion = "2023-06-01"
+
+	// claudeMaxAttempts bounds how many times callClaude will (re)issue a
+	// request when the API returns a transient signal. The total wall time is
+	// further bounded by the request context (90s in the handlers), so a real
+	// long generation that eats the deadline simply stops retrying.
+	claudeMaxAttempts = 4
+	// claudeBackoffBase is the first retry delay; subsequent delays double it
+	// (500ms, 1s, 2s, …) plus jitter, unless the API sends a Retry-After.
+	claudeBackoffBase = 500 * time.Millisecond
+	claudeBackoffMax  = 8 * time.Second
 )
+
+// transientClaudeStatus reports whether an HTTP status from the Claude API is
+// worth retrying. 429 (rate limit) and 529 (overloaded) are the ones Anthropic
+// explicitly recommends retrying; 500/502/503 are transient upstream blips.
+// These previously surfaced straight to the user as a 502 with no retry, which
+// was the dominant cause of clustered "claude api: Overloaded" failures under
+// load.
+func transientClaudeStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, // 429
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		529:                            // overloaded_error
+		return true
+	}
+	return false
+}
+
+// parseRetryAfter reads a Retry-After header (delta-seconds form only, which is
+// what Anthropic sends) and returns it as a duration, or 0 if absent/invalid.
+func parseRetryAfter(h http.Header) time.Duration {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
+
+// claudeBackoff computes the wait before retry attempt n (1-based). When the
+// server supplied a Retry-After we honor it; otherwise we use exponential
+// backoff with full jitter, capped at claudeBackoffMax.
+func claudeBackoff(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		if retryAfter > claudeBackoffMax {
+			return claudeBackoffMax
+		}
+		return retryAfter
+	}
+	d := claudeBackoffBase << (attempt - 1)
+	if d > claudeBackoffMax {
+		d = claudeBackoffMax
+	}
+	// Full jitter: pick uniformly in [d/2, d] to avoid synchronized retries
+	// across concurrent requests all hitting the API at the same instant.
+	half := d / 2
+	return half + time.Duration(rand.Int63n(int64(half)+1))
+}
 
 type claudeMessage struct {
 	Role    string `json:"role"`
@@ -64,9 +130,42 @@ func (a *App) callClaude(ctx context.Context, system, user string, maxTokens int
 	if err != nil {
 		return "", err
 	}
+
+	var lastErr error
+	attempt := 1
+	for ; attempt <= claudeMaxAttempts; attempt++ {
+		text, retryAfter, retryable, err := a.doClaudeRequest(ctx, payload, maxTokens)
+		if err == nil {
+			return text, nil
+		}
+		lastErr = err
+		// Non-transient (auth, bad request, truncation, parse) or the final
+		// attempt: surface immediately. The caller turns this into the 502.
+		if !retryable || attempt == claudeMaxAttempts {
+			break
+		}
+		delay := claudeBackoff(attempt, retryAfter)
+		log.Printf("claude: transient failure (attempt %d/%d): %v — retrying in %s",
+			attempt, claudeMaxAttempts, err, delay.Round(time.Millisecond))
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	log.Printf("claude: giving up after %d attempt(s): %v", min(attempt, claudeMaxAttempts), lastErr)
+	return "", lastErr
+}
+
+// doClaudeRequest performs one round-trip to the Claude messages API. It
+// returns the assembled text on success, or an error together with a
+// retryable flag and any server-suggested Retry-After delay. Transient
+// conditions (network error, 429/5xx/529, overloaded_error) are reported as
+// retryable so callClaude can back off and try again.
+func (a *App) doClaudeRequest(ctx context.Context, payload []byte, maxTokens int) (text string, retryAfter time.Duration, retryable bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", claudeAPIURL, bytes.NewReader(payload))
 	if err != nil {
-		return "", err
+		return "", 0, false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", claudeAPIVersion)
@@ -75,23 +174,37 @@ func (a *App) callClaude(ctx context.Context, system, user string, maxTokens int
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		// Don't retry if the failure is the caller's context being cancelled
+		// or its deadline expiring — backing off would be pointless.
+		if ctx.Err() != nil {
+			return "", 0, false, err
+		}
+		// Network-level errors (connection reset, DNS, TLS) are transient.
+		return "", 0, true, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", 0, ctx.Err() == nil, err
 	}
+
 	var cr claudeResponse
-	if err := json.Unmarshal(body, &cr); err != nil {
-		return "", fmt.Errorf("decode claude response: %w", err)
+	if jerr := json.Unmarshal(body, &cr); jerr != nil {
+		// A non-JSON body on a transient status (e.g. a gateway's plain-text
+		// 503) should still be retried rather than mis-reported as a decode bug.
+		if transientClaudeStatus(resp.StatusCode) {
+			return "", parseRetryAfter(resp.Header), true, fmt.Errorf("claude api status %d", resp.StatusCode)
+		}
+		return "", 0, false, fmt.Errorf("decode claude response: %w", jerr)
 	}
 	if cr.Error != nil {
-		return "", fmt.Errorf("claude api: %s", cr.Error.Message)
+		retry := transientClaudeStatus(resp.StatusCode) || cr.Error.Type == "overloaded_error" || cr.Error.Type == "rate_limit_error"
+		return "", parseRetryAfter(resp.Header), retry, fmt.Errorf("claude api: %s", cr.Error.Message)
 	}
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("claude api status %d", resp.StatusCode)
+		return "", parseRetryAfter(resp.Header), transientClaudeStatus(resp.StatusCode), fmt.Errorf("claude api status %d", resp.StatusCode)
 	}
+
 	var sb strings.Builder
 	for _, c := range cr.Content {
 		if c.Type == "text" {
@@ -99,9 +212,10 @@ func (a *App) callClaude(ctx context.Context, system, user string, maxTokens int
 		}
 	}
 	if cr.StopReason == "max_tokens" {
-		return sb.String(), fmt.Errorf("response truncated at max_tokens=%d — increase the limit", maxTokens)
+		// Truncation is deterministic, not transient — retrying won't help.
+		return sb.String(), 0, false, fmt.Errorf("response truncated at max_tokens=%d — increase the limit", maxTokens)
 	}
-	return sb.String(), nil
+	return sb.String(), 0, false, nil
 }
 
 // logClaudeParseFailure records the raw model output (truncated) so prompt or
