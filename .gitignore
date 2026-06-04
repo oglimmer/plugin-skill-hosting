@@ -3,6 +3,8 @@ backend/server
 backend/marketplace
 backend/import-plugin
 backend/data/
+# Local DATA_DIR when running via ./oglimmer.sh (served git repos + work dirs)
+/data/
 backend/.idea/
 node_modules/
 frontend/dist/
@@ -12,6 +14,8 @@ backend/coverage.txt
 .DS_Store
 *.log
 .antigravitycli/
+# Scratch output from the Playwright MCP (screenshots, snapshots, console logs)
+.playwright-mcp/
 
 # Packaged Helm charts (built into a temp dir at release time)
 *.tgz
