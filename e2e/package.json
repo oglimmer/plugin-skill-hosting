@@ -1,0 +1,17 @@
+{
+  "name": "marketplace-e2e",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end tests that drive the full docker-compose stack (frontend + backend + Postgres) through real user journeys.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "stack:up": "docker compose -f ../compose.yml up --build -d",
+    "stack:down": "docker compose -f ../compose.yml down -v --remove-orphans"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
