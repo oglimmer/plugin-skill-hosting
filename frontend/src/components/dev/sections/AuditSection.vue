@@ -60,6 +60,15 @@ const envVars = [
         is unconfigured the alert is logged instead, never dropped.
       </li>
       <li>
+        The same signal is also published on <code>/metrics</code> for alerting
+        that doesn't depend on SMTP: <code>psh_skill_audit_flagged_skills</code>
+        (skills at/above the threshold as of the last sweep — alert on
+        <code>&gt; 0</code>), <code>psh_skill_audit_risk_score</code> (latest
+        per-skill score, labeled by plugin/skill/level), and
+        <code>psh_skill_audit_last_run_timestamp_seconds</code> (to detect a
+        stalled sweep).
+      </li>
+      <li>
         The audit looks for data exfiltration, destructive actions, malicious
         code, credential/secret harvesting, prompt injection, deception/stealth,
         and supply-chain risk.

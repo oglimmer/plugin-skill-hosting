@@ -158,6 +158,40 @@ var (
 		},
 		[]string{"trigger"},
 	)
+
+	// SkillAuditFlaggedSkills is the metrics-side analog of the audit alert
+	// email: the number of skills whose latest audit score reached or exceeded
+	// the alert threshold, as of the last completed sweep. Alert on `> 0` to
+	// learn that risky skills are live, independent of SMTP being configured.
+	SkillAuditFlaggedSkills = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "psh_skill_audit_flagged_skills",
+			Help: "Skills at or above the audit alert threshold as of the last completed sweep.",
+		},
+	)
+
+	// SkillAuditRiskScore is the latest audit risk score (0-100) per skill,
+	// giving the per-skill detail the alert email lists. Re-populated each
+	// sweep (stale series for deleted/renamed skills are cleared via Reset), so
+	// monitoring can alert on specific skills and apply its own thresholds.
+	SkillAuditRiskScore = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "psh_skill_audit_risk_score",
+			Help: "Latest security-audit risk score (0-100) per skill, by plugin, skill, and risk level.",
+		},
+		[]string{"plugin", "skill", "level"},
+	)
+
+	// SkillAuditLastRunTimestamp is the Unix time of the last completed sweep,
+	// so a silently-stalled audit goroutine is detectable (e.g. alert on
+	// `time() - metric > 2 * interval`) — a stale gauge is as visible as a
+	// missing alert email.
+	SkillAuditLastRunTimestamp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "psh_skill_audit_last_run_timestamp_seconds",
+			Help: "Unix timestamp of the last completed skill audit sweep.",
+		},
+	)
 )
 
 func init() {
@@ -181,6 +215,9 @@ func init() {
 		MCPToolCallDuration,
 		SkillAuditTotal,
 		SkillAuditRunsTotal,
+		SkillAuditFlaggedSkills,
+		SkillAuditRiskScore,
+		SkillAuditLastRunTimestamp,
 	)
 }
 

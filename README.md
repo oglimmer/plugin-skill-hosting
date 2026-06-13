@@ -239,6 +239,7 @@ Mechanics:
 - Each call scores the skill `0–100` (`low`/`medium`/`high`/`critical`), with threat categories, a one-line summary, and per-finding details. The server recomputes the level from the score, so the model can't under-report severity.
 - **Unlike the skill validator**, the audit sends supporting-file *contents* (scripts, references) to the model — malicious payloads typically hide there rather than in `SKILL.md`. Text files are capped per file; binary files are listed by path/size only. Note that this means skill file contents leave your infrastructure on each run.
 - Skills scoring at or above `AUDIT_ALERT_THRESHOLD` trigger a single batched alert email per sweep. When SMTP is unconfigured (or no recipients are set) the alert is written to the logs instead, never dropped.
+- The same signal is also published on `/metrics` for alerting that doesn't depend on SMTP: `psh_skill_audit_flagged_skills` (skills at/above the threshold as of the last sweep — alert on `> 0`), `psh_skill_audit_risk_score{plugin,skill,level}` (latest per-skill score, repopulated each sweep), and `psh_skill_audit_last_run_timestamp_seconds` (so a stalled sweep is detectable via `time() - metric > 2 * interval`).
 - A failed audit for one skill (API error, unparseable output) is recorded with its error and skipped — the sweep continues. Overlapping sweeps are prevented; a manual trigger while one is running returns `409`.
 
 Under Helm, set the `audit` and `smtp` blocks in `values.yaml`; `SMTP_PASSWORD` goes into the application secret alongside the other optional keys.

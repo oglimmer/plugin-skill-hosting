@@ -123,6 +123,10 @@ func (a *App) auditAllSkills(ctx context.Context, trigger string) {
 	}
 	log.Printf("skill audit (%s): auditing %d skills", trigger, len(targets))
 
+	// Clear last sweep's per-skill gauges so deleted/renamed skills don't linger
+	// as stale series; we repopulate below for each successfully-audited skill.
+	metrics.SkillAuditRiskScore.Reset()
+
 	var flagged []AuditResult
 	for _, t := range targets {
 		if ctx.Err() != nil {
@@ -133,12 +137,21 @@ func (a *App) auditAllSkills(ctx context.Context, trigger string) {
 		if err := a.storeAuditResult(ctx, t, res); err != nil {
 			log.Printf("ERROR: skill audit: store result for %s/%s: %v", t.PluginName, t.SkillName, err)
 		}
-		if res.Error == "" && res.RiskScore >= a.Cfg.AuditThreshold {
-			flagged = append(flagged, res)
+		if res.Error == "" {
+			metrics.SkillAuditRiskScore.
+				WithLabelValues(t.PluginName, t.SkillName, res.RiskLevel).
+				Set(float64(res.RiskScore))
+			if res.RiskScore >= a.Cfg.AuditThreshold {
+				flagged = append(flagged, res)
+			}
 		}
 	}
 
 	metrics.SkillAuditRunsTotal.WithLabelValues(trigger).Inc()
+	// Publish the sweep's flagged-skill state for monitoring — the /metrics-side
+	// equivalent of the alert email, usable even when SMTP is unconfigured.
+	metrics.SkillAuditFlaggedSkills.Set(float64(len(flagged)))
+	metrics.SkillAuditLastRunTimestamp.SetToCurrentTime()
 
 	if len(flagged) > 0 {
 		a.sendAuditAlert(flagged)
