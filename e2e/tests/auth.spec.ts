@@ -19,9 +19,11 @@ test.describe.serial('authentication', () => {
     await register(page, user)
     // The plugins tab is the default landing surface.
     await expect(page.getByRole('tab', { name: /plugins/ })).toBeVisible()
-    // First account on a fresh stack is admin, so the admin-only "audit" nav
-    // link is present and the admin-only /users page loads instead of 403ing.
-    await expect(page.getByRole('link', { name: 'audit' })).toBeVisible()
+    // First account on a fresh stack is admin, so the admin dropdown (behind
+    // the username) exposes the admin-only destinations, and the admin-only
+    // /users page loads instead of 403ing.
+    await page.getByRole('button', { name: user.username }).click()
+    await expect(page.getByRole('menuitem', { name: 'Security audit' })).toBeVisible()
     await page.goto('/users')
     await expect(page).toHaveURL('/users')
   })
