@@ -335,4 +335,6 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+deploymentAnnotations: {}
+
 imagePullSecrets: []

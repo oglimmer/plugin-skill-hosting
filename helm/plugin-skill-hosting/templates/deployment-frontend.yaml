@@ -4,6 +4,10 @@ metadata:
   name: {{ include "psh.frontend.fullname" . }}
   labels:
     {{- include "psh.frontend.labels" . | nindent 4 }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.frontend.replicaCount }}
   selector:
