@@ -29,6 +29,12 @@ VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 RESTART="${RESTART:-true}"
 PUSH="${PUSH:-true}"
+
+# Restart hook configuration (used when kubectl is not available, e.g. on CI
+# runners that can't reach the cluster directly). The hook triggers an
+# in-cluster rollout; see restart_deployment() below.
+RESTART_HOOK_URL="${RESTART_HOOK_URL:-https://restart.oglimmer.com/restart}"
+RESTART_NAMESPACE="${RESTART_NAMESPACE:-default}"
 HELP=false
 PLATFORM="${PLATFORM:-arm64}"
 RELEASE_MODE=false
@@ -152,7 +158,15 @@ ENVIRONMENT VARIABLES:
     VERBOSE                 Enable verbose mode (true/false)
     DRY_RUN                 Enable dry-run mode (true/false)
     PUSH                    Enable/disable pushing to registry (true/false)
-    RESTART                 Enable/disable Kubernetes restart (true/false)
+    RESTART                 Enable/disable deployment restart (true/false)
+    RESTART_TOKEN           Bearer token for the restart hook. Used to restart
+                            deployments when kubectl is not available (e.g. CI).
+    RESTART_HOOK_URL        Restart hook base URL (default: https://restart.oglimmer.com/restart)
+    RESTART_NAMESPACE       Namespace for the restart hook (default: default)
+
+RESTART BEHAVIOR:
+    When a restart is requested, kubectl is used if available; otherwise the
+    restart hook is called using RESTART_TOKEN. Pass --no-restart to skip.
 
 EOF
 }
@@ -308,7 +322,19 @@ parse_args() {
 
 # Check if required tools are available
 check_prerequisites() {
-    local tools=("docker" "kubectl")
+    local tools=("docker")
+
+    # Restarting a deployment needs EITHER kubectl (direct rollout) OR a
+    # RESTART_TOKEN (to call the restart hook). Build-only environments like CI
+    # have neither and pass --no-restart. Validate the requirement early so we
+    # fail before building rather than after.
+    if [[ "$RESTART" == true ]]; then
+        if ! command -v kubectl >/dev/null 2>&1 && [[ -z "${RESTART_TOKEN:-}" ]]; then
+            log_error "Restart requested but kubectl is not available and RESTART_TOKEN is not set"
+            echo "Install kubectl, set RESTART_TOKEN, or pass --no-restart." >&2
+            exit 1
+        fi
+    fi
 
     # Add additional tools for release mode
     if [[ "$RELEASE_MODE" == true ]]; then
@@ -621,8 +647,25 @@ build_image() {
     fi
 }
 
-# Restart Kubernetes deployment
+# Restart a deployment. Prefer kubectl when it's available (local/dev with
+# cluster access); otherwise fall back to the restart hook using RESTART_TOKEN
+# (CI runners that can't reach the cluster directly). This keeps the restart
+# logic in one place so callers just ask for a restart.
 restart_deployment() {
+    local deployment="$1"
+
+    if command -v kubectl >/dev/null 2>&1; then
+        restart_via_kubectl "$deployment"
+    elif [[ -n "${RESTART_TOKEN:-}" ]]; then
+        restart_via_hook "$deployment"
+    else
+        log_error "Cannot restart $deployment: kubectl is not available and RESTART_TOKEN is not set"
+        exit 1
+    fi
+}
+
+# Restart via a direct kubectl rollout.
+restart_via_kubectl() {
     local deployment="$1"
 
     log_info "Restarting deployment: $deployment"
@@ -637,6 +680,27 @@ restart_deployment() {
         fi
     else
         log_error "Failed to restart deployment: $deployment"
+        exit 1
+    fi
+}
+
+# Restart via the in-cluster restart hook (POST authenticated with
+# RESTART_TOKEN). The token is never echoed, even in dry-run/verbose mode.
+restart_via_hook() {
+    local deployment="$1"
+    local url="${RESTART_HOOK_URL}/${RESTART_NAMESPACE}/${deployment}"
+
+    log_info "Restarting deployment via hook: $url"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${YELLOW}[DRY-RUN]${RESET} curl -fsS -X POST -H 'Authorization: Bearer ***' $url"
+        return 0
+    fi
+
+    if curl -fsS -X POST -H "Authorization: Bearer $RESTART_TOKEN" "$url" >/dev/null; then
+        log_success "Deployment $deployment restart triggered via hook"
+    else
+        log_error "Failed to trigger restart for $deployment via hook"
         exit 1
     fi
 }

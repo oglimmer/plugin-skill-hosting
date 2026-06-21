@@ -1,0 +1,87 @@
+name: Build & push images
+
+# Builds the frontend and/or backend Docker images and pushes them to
+# ghcr.io/oglimmer via the repo's oglimmer.sh script, on the in-cluster
+# self-hosted ARC runner (arm64, Docker-in-Docker). Only the components whose
+# files changed are built (mirrors ci.yml). The runner has no kubectl, so
+# oglimmer.sh triggers the rollout via the restart hook (restart.oglimmer.com)
+# using the RESTART_TOKEN secret passed in the environment.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# One build per ref; cancel superseded pushes.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Detect which parts of the repo changed so we only build the relevant images.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'oglimmer.sh'
+              - '.github/workflows/build.yml'
+            frontend:
+              - 'frontend/**'
+              - 'oglimmer.sh'
+              - '.github/workflows/build.yml'
+
+  backend:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    runs-on: arc-plugin-skill-hosting   # in-cluster ARC runner scale set
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --platform auto -> plain `docker build` + `docker push` via the dind
+      # daemon (native arm64). Avoids the buildx docker-container driver, whose
+      # push session times out against the registry's public ingress.
+      # No kubectl on the runner, so the rollout goes through the restart hook.
+      - name: Build, push & restart backend
+        env:
+          RESTART_TOKEN: ${{ secrets.RESTART_TOKEN }}
+        run: ./oglimmer.sh build -b --platform auto --verbose
+
+  frontend:
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    runs-on: arc-plugin-skill-hosting
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No kubectl on the runner, so the rollout goes through the restart hook.
+      - name: Build, push & restart frontend
+        env:
+          RESTART_TOKEN: ${{ secrets.RESTART_TOKEN }}
+        run: ./oglimmer.sh build -f --platform auto --verbose
