@@ -4,8 +4,13 @@
     "config:recommended",
     ":enableVulnerabilityAlerts",
     ":dependencyDashboard",
-    ":semanticCommits"
+    ":semanticCommits",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests",
+    ":pinDevDependencies",
+    "abandonments:recommended"
   ],
+  "configMigration": true,
   "timezone": "Europe/Berlin",
   "prHourlyLimit": 10,
   "prConcurrentLimit": 20,
@@ -14,19 +19,34 @@
   "automergeType": "branch",
   "packageRules": [
     {
-      "automerge": true,
+      "description": "Group each manager's non-major updates into one PR per manager",
       "matchUpdateTypes": [
         "minor",
-        "patch"
-      ]
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "{{manager}} non-major dependencies"
     },
     {
+      "description": "Automerge minor, patch, pin, digest updates (low-risk, non-major)",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Automerge all devDependencies (build/test tooling, not shipped to consumers)",
       "matchDepTypes": [
         "devDependencies"
       ],
       "automerge": true
     },
     {
+      "description": "Automerge Maven/Gradle wrapper updates",
       "matchManagers": [
         "maven-wrapper",
         "gradle-wrapper"
@@ -34,29 +54,19 @@
       "automerge": true
     },
     {
+      "description": "Never automerge 0.x releases — semver allows breaking changes before 1.0",
       "matchCurrentVersion": "/^0\\./",
       "automerge": false
     },
     {
-      "matchManagers": [
-        "npm"
+      "description": "Isolate major updates behind Dependency Dashboard approval",
+      "matchUpdateTypes": [
+        "major"
       ],
-      "groupName": "npm dependencies"
+      "dependencyDashboardApproval": true
     },
     {
-      "matchManagers": [
-        "helmv3",
-        "helmfile"
-      ],
-      "groupName": "Helm dependencies"
-    },
-    {
-      "matchManagers": [
-        "gomod"
-      ],
-      "groupName": "Go dependencies"
-    },
-    {
+      "description": "Pin Postgres to the 16.x line (compose.yml uses postgres:16-alpine)",
       "matchPackageNames": [
         "postgres"
       ],
@@ -64,21 +74,22 @@
     }
   ],
   "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": [
-      "at any time"
+      "before 5am on monday"
     ],
     "automerge": true
   },
   "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days",
     "labels": [
       "security"
     ],
     "schedule": [
       "at any time"
     ],
-    "automerge": true,
-    "minimumReleaseAge": "0 days"
+    "automerge": true
   }
 }
