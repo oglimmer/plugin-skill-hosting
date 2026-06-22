@@ -17,10 +17,15 @@ import SkillVersionHistory from '../components/SkillVersionHistory.vue'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
 import { usePluginStore } from '../stores/plugins'
+import { useAuthStore } from '../stores/auth'
+import { usePrompt } from '../composables/usePrompt'
 
 const pluginStore = usePluginStore()
+const auth = useAuthStore()
 
 const { confirm } = useConfirm()
+const { prompt } = usePrompt()
+const isAdmin = computed(() => !!auth.user?.isAdmin)
 
 const props = defineProps<{
   pluginName: string
@@ -193,6 +198,18 @@ const audit = ref<{
   updatedAt?: string
 }>({})
 
+// Lock state of the loaded skill. A locked skill is withdrawn from git/MCP and
+// is read-only here: every mutating action is disabled and the server would
+// reject it with 403 anyway. Only an admin can lock or unlock.
+const lock = ref<{
+  locked: boolean
+  reason?: string
+  source?: 'admin' | 'audit'
+  byName?: string
+}>({ locked: false })
+const locked = computed(() => lock.value.locked)
+const lockBusy = ref(false)
+
 // Pristine snapshot of the editable fields. Updated whenever the form's
 // contents match what's persisted on the server (initial load, after save,
 // after revert) so isDirty correctly flips back to false.
@@ -264,6 +281,12 @@ async function load() {
       createdAt: s.createdAt,
       updatedByName: s.updatedByName,
       updatedAt: s.updatedAt,
+    }
+    lock.value = {
+      locked: s.locked,
+      reason: s.lockReason,
+      source: s.lockSource,
+      byName: s.lockedByName,
     }
     snapshotPristine()
     await loadFiles()
@@ -352,6 +375,49 @@ async function deleteSkill() {
     router.push(`/plugins/${props.pluginName}`)
   } catch (e: unknown) {
     error.value = errMsg(e)
+  }
+}
+
+// ─── Lock / unlock (admin only) ────────────────────────────────────
+// Locking withdraws the skill from git, the external mirror, and MCP; it stays
+// visible here, read-only. Unlocking restores it. Both reload the skill so the
+// banner and disabled-state update.
+async function lockSkill() {
+  if (!props.skillName) return
+  const reason = await prompt({
+    title: `Lock skill "${props.skillName}"`,
+    message: 'Locking withdraws this skill from git, the external mirror, and MCP. It stays visible here, marked as locked. Add an optional reason:',
+    placeholder: 'e.g. under security review',
+    confirmLabel: 'Lock skill',
+  })
+  if (reason === null) return
+  lockBusy.value = true
+  try {
+    await api.lockSkill(props.pluginName, props.skillName, reason)
+    await load()
+  } catch (e: unknown) {
+    error.value = errMsg(e)
+  } finally {
+    lockBusy.value = false
+  }
+}
+
+async function unlockSkill() {
+  if (!props.skillName) return
+  const ok = await confirm({
+    title: `Unlock skill "${props.skillName}"`,
+    message: 'This restores the skill to git, the external mirror, and MCP. If the audit locked it automatically, future audit runs will not re-lock it.',
+    confirmLabel: 'Unlock',
+  })
+  if (!ok) return
+  lockBusy.value = true
+  try {
+    await api.unlockSkill(props.pluginName, props.skillName)
+    await load()
+  } catch (e: unknown) {
+    error.value = errMsg(e)
+  } finally {
+    lockBusy.value = false
   }
 }
 
@@ -520,15 +586,31 @@ watch(() => [props.pluginName, props.skillName], load)
       </div>
       <div class="se-bar__actions">
         <button
+          v-if="isEdit && isAdmin && !locked"
+          type="button"
+          class="se-btn"
+          :disabled="lockBusy"
+          @click="lockSkill"
+        >{{ lockBusy ? 'locking…' : 'lock' }}</button>
+        <button
+          v-if="isEdit && isAdmin && locked"
+          type="button"
+          class="se-btn se-btn--unlock"
+          :disabled="lockBusy"
+          @click="unlockSkill"
+        >{{ lockBusy ? 'unlocking…' : 'unlock' }}</button>
+        <button
           v-if="isEdit"
           type="button"
           class="se-btn se-btn--danger"
+          :disabled="locked"
           @click="deleteSkill"
         >delete</button>
         <button
           v-if="isEdit"
           type="button"
           class="se-btn"
+          :disabled="locked"
           @click="openMove"
         >move</button>
         <button
@@ -545,11 +627,26 @@ watch(() => [props.pluginName, props.skillName], load)
         <button
           type="button"
           class="se-btn se-btn--primary"
-          :disabled="loading || importing"
+          :disabled="loading || importing || locked"
           @click="submit"
         >{{ loading ? 'saving…' : (isEdit ? 'save' : 'create') }}</button>
       </div>
     </header>
+
+    <!-- Locked banner -->
+    <div v-if="isEdit && locked" class="se-lock" role="status">
+      <span class="se-lock__badge">🔒 locked</span>
+      <div class="se-lock__body">
+        <p class="se-lock__title">
+          This skill is locked{{ lock.source === 'audit' ? ' by the security audit' : (lock.byName ? ` by ${lock.byName}` : ' by an admin') }}
+          and is hidden from git, the external mirror, and MCP. It stays visible here, read-only.
+        </p>
+        <p v-if="lock.reason" class="se-lock__reason">reason: {{ lock.reason }}</p>
+        <p class="se-lock__hint">
+          {{ isAdmin ? 'Unlock it (top right) to restore access and allow edits.' : 'Only an admin can unlock it.' }}
+        </p>
+      </div>
+    </div>
 
     <!-- ZIP / .skill import bar (new mode only) -->
     <div v-if="!isEdit" class="se-notice">
@@ -702,12 +799,14 @@ watch(() => [props.pluginName, props.skillName], load)
               type="button"
               class="se-tree__act"
               title="New file"
+              :disabled="locked"
               @click="promptNewFile(folder)"
             >+ new</button>
             <button
               type="button"
               class="se-tree__act"
               title="Upload files"
+              :disabled="locked"
               @click="triggerUpload(folder)"
             >↑ upload</button>
           </header>
@@ -746,7 +845,7 @@ watch(() => [props.pluginName, props.skillName], load)
             <span class="se-pane__meta">{{ fileIsBinary ? 'binary' : 'text' }} · {{ fmtBytes(fileSize) }}</span>
             <span class="spacer"></span>
             <button v-if="!fileLoading" type="button" class="se-btn" @click="downloadCurrentFile">download</button>
-            <button v-if="!fileLoading" type="button" class="se-btn se-btn--danger" @click="deleteCurrentFile">delete</button>
+            <button v-if="!fileLoading" type="button" class="se-btn se-btn--danger" :disabled="locked" @click="deleteCurrentFile">delete</button>
           </header>
 
           <p v-if="fileLoading" class="se-pane__loading">loading…</p>
@@ -777,7 +876,7 @@ watch(() => [props.pluginName, props.skillName], load)
               <button
                 type="button"
                 class="se-btn se-btn--primary"
-                :disabled="!fileDirty"
+                :disabled="!fileDirty || locked"
                 @click="saveCurrentFile"
               >save file</button>
             </div>
@@ -1131,6 +1230,59 @@ watch(() => [props.pluginName, props.skillName], load)
   background: var(--success);
   border-color: var(--success);
   font-weight: 700;
+}
+
+.se-btn--unlock {
+  color: var(--accent);
+  border-color: rgb(var(--accent-rgb) / 0.5);
+}
+.se-btn--unlock:hover {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ─── Locked banner ────────────────────────────────────────────── */
+.se-lock {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-left: 2px solid var(--rust);
+  background: rgb(var(--rust-rgb) / 0.06);
+}
+.se-lock__badge {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--rust);
+  border: 1px solid rgb(var(--rust-rgb) / 0.5);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.se-lock__body { min-width: 0; }
+.se-lock__title {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.se-lock__reason {
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-soft);
+}
+.se-lock__hint {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
 }
 
 /* ─── Import notice (new mode) ─────────────────────────────────── */

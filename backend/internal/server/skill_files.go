@@ -268,6 +268,9 @@ func (a *App) handleUpsertSkillFile(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
+	if rejectIfLocked(w, s) {
+		return
+	}
 	pth, err := validateSkillFilePath(filePathParam(r))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -381,6 +384,9 @@ func (a *App) handleDeleteSkillFile(w http.ResponseWriter, r *http.Request) {
 	}
 	s := a.loadActiveSkillOrRespond(w, r, p.ID)
 	if s == nil {
+		return
+	}
+	if rejectIfLocked(w, s) {
 		return
 	}
 	pth, err := validateSkillFilePath(filePathParam(r))

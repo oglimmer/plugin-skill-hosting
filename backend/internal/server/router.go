@@ -158,6 +158,12 @@ func NewRouter(app *App) http.Handler {
 				r.Put("/plugins/{name}/skills/{skill}", app.handleUpdateSkill)
 				r.Delete("/plugins/{name}/skills/{skill}", app.handleDeleteSkill)
 				r.Post("/plugins/{name}/skills/{skill}/move", app.handleMoveSkill)
+				// Lock / unlock are admin-only: only an admin can withdraw a skill
+				// from git/MCP or release one the audit auto-locked.
+				r.With(app.requireAdminMiddleware).
+					Post("/plugins/{name}/skills/{skill}/lock", app.handleLockSkill)
+				r.With(app.requireAdminMiddleware).
+					Delete("/plugins/{name}/skills/{skill}/lock", app.handleUnlockSkill)
 				r.Get("/plugins/{name}/deleted-skills", app.handleListDeletedSkills)
 				r.Post("/plugins/{name}/skills/{skill}/restore", app.handleRestoreSkill)
 				r.Get("/plugins/{name}/skills/{skill}/versions", app.handleListSkillVersions)

@@ -9,8 +9,10 @@ import ErrorView from './ErrorView.vue'
 import { useAuthStore } from '../stores/auth'
 import { usePluginStore } from '../stores/plugins'
 import { useConfirm } from '../composables/useConfirm'
+import { usePrompt } from '../composables/usePrompt'
 
 const { confirm } = useConfirm()
+const { prompt } = usePrompt()
 
 const route = useRoute()
 const router = useRouter()
@@ -138,6 +140,51 @@ async function restoreSkill(name: string) {
   if (!plugin.value) return
   try {
     await api.restoreSkill(plugin.value.name, name)
+    await load()
+  } catch (e: unknown) {
+    error.value = errMsg(e)
+  }
+}
+
+// lockTitle composes the hover tooltip for a locked skill: how it was locked,
+// by whom, and why.
+function lockTitle(s: Skill): string {
+  if (!s.locked) return ''
+  const who = s.lockSource === 'audit' ? 'security audit' : (s.lockedByName || 'an admin')
+  const parts = [`locked by ${who}`]
+  if (s.lockReason) parts.push(s.lockReason)
+  return parts.join(' — ')
+}
+
+// Admin-only. Locking withdraws the skill from git, the external mirror, and
+// MCP; it stays visible here marked as locked. Unlocking restores it.
+async function lockSkill(name: string) {
+  if (!plugin.value) return
+  const reason = await prompt({
+    title: `Lock skill "${name}"`,
+    message: 'Locking withdraws this skill from git, the external mirror, and MCP. It stays visible here, marked as locked. Add an optional reason:',
+    placeholder: 'e.g. under security review',
+    confirmLabel: 'Lock skill',
+  })
+  if (reason === null) return
+  try {
+    await api.lockSkill(plugin.value.name, name, reason)
+    await load()
+  } catch (e: unknown) {
+    error.value = errMsg(e)
+  }
+}
+
+async function unlockSkill(name: string) {
+  if (!plugin.value) return
+  const ok = await confirm({
+    title: `Unlock skill "${name}"`,
+    message: 'This restores the skill to git, the external mirror, and MCP. If the audit locked it automatically, future audit runs will not re-lock it.',
+    confirmLabel: 'Unlock',
+  })
+  if (!ok) return
+  try {
+    await api.unlockSkill(plugin.value.name, name)
     await load()
   } catch (e: unknown) {
     error.value = errMsg(e)
@@ -314,25 +361,43 @@ watch(() => route.params.name, load)
                 <span class="pd-th__label">{{ col.label }}</span>
                 <span class="pd-th__arrow" :class="{ 'pd-th__arrow--active': sortKey === col.key }" aria-hidden="true">{{ sortKey === col.key ? (sortAsc ? '▲' : '▼') : '↕' }}</span>
               </th>
+              <th v-if="isAdmin" class="pd-th pd-th--admin">lock</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="s in visibleSkills" :key="s.id">
+            <tr v-for="s in visibleSkills" :key="s.id" :class="{ 'pd-row--locked': s.locked }">
               <td class="pd-table__name">
                 <RouterLink
                   v-if="isAuthed"
                   :to="`/plugins/${plugin.name}/skills/${s.name}/edit`"
                 >{{ s.name }}</RouterLink>
                 <span v-else>{{ s.name }}</span>
+                <span v-if="s.locked" class="pd-lock" :title="lockTitle(s)">
+                  🔒 locked<span v-if="s.lockSource === 'audit'" class="pd-lock__src"> · audit</span>
+                </span>
               </td>
               <td class="pd-table__desc">{{ s.description }}</td>
               <td class="pd-table__when">
                 <span class="pd-table__when-date">{{ fmtDate(s.updatedAt) }}</span>
                 <span class="pd-table__when-time">{{ fmtTime(s.updatedAt) }}</span>
               </td>
+              <td v-if="isAdmin" class="pd-table__act">
+                <button
+                  v-if="!s.locked"
+                  type="button"
+                  class="pd-btn"
+                  @click="lockSkill(s.name)"
+                >lock</button>
+                <button
+                  v-else
+                  type="button"
+                  class="pd-btn pd-btn--unlock"
+                  @click="unlockSkill(s.name)"
+                >unlock</button>
+              </td>
             </tr>
             <tr v-if="visibleSkills.length === 0">
-              <td :colspan="skillColumns.length" class="pd-table__none">no skills match “{{ search }}”</td>
+              <td :colspan="isAdmin ? skillColumns.length + 1 : skillColumns.length" class="pd-table__none">no skills match “{{ search }}”</td>
             </tr>
           </tbody>
         </table>
@@ -821,6 +886,28 @@ watch(() => route.params.name, load)
   transition: color 0.12s ease;
 }
 .pd-table__name a:hover { color: var(--accent); }
+.pd-lock {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--rust);
+  border: 1px solid rgb(var(--rust-rgb) / 0.5);
+  background: rgb(var(--rust-rgb) / 0.06);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.pd-lock__src { color: var(--muted); font-weight: 500; }
+.pd-row--locked { background: rgb(var(--rust-rgb) / 0.03); }
+.pd-row--locked .pd-table__desc { color: var(--muted); }
+.pd-th--admin { text-align: right; white-space: nowrap; }
+.pd-btn--unlock { color: var(--accent); border-color: rgb(var(--accent-rgb) / 0.5); }
+.pd-btn--unlock:hover { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 .pd-table__desc { color: var(--text-soft); }
 .pd-table__when {
   color: var(--muted);

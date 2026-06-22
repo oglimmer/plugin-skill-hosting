@@ -128,6 +128,10 @@ func (a *App) auditAllSkills(ctx context.Context, trigger string) {
 	metrics.SkillAuditRiskScore.Reset()
 
 	var flagged []AuditResult
+	// Plugins that gained a freshly auto-locked skill this sweep; re-materialized
+	// once at the end so each locked skill drops out of git and the external
+	// mirror. A set, so a plugin with several flagged skills rebuilds only once.
+	lockedPlugins := map[string]struct{}{}
 	for _, t := range targets {
 		if ctx.Err() != nil {
 			log.Printf("skill audit: context cancelled, stopping sweep")
@@ -143,7 +147,34 @@ func (a *App) auditAllSkills(ctx context.Context, trigger string) {
 				Set(float64(res.RiskScore))
 			if res.RiskScore >= a.Cfg.AuditThreshold {
 				flagged = append(flagged, res)
+				// Auto-lock the offending skill. autoLockSkill is a no-op when the
+				// skill is already locked or an admin has acknowledged a prior
+				// audit lock, so this never overrides a manual decision.
+				reason := res.Summary
+				if reason == "" {
+					reason = fmt.Sprintf("auto-locked by security audit: risk score %d (%s)", res.RiskScore, res.RiskLevel)
+				}
+				if locked, err := a.autoLockSkill(ctx, t.SkillID, reason); err != nil {
+					log.Printf("ERROR: skill audit: auto-lock %s/%s: %v", t.PluginName, t.SkillName, err)
+				} else if locked {
+					lockedPlugins[t.PluginName] = struct{}{}
+					log.Printf("skill audit: auto-locked %s/%s (risk %d)", t.PluginName, t.SkillName, res.RiskScore)
+				}
 			}
+		}
+	}
+
+	// Rebuild the git repos for plugins whose skills got auto-locked, so the
+	// withdrawal is reflected in the served trees without waiting for the next
+	// content change.
+	for name := range lockedPlugins {
+		p, err := a.loadPluginByName(ctx, name)
+		if err != nil {
+			log.Printf("ERROR: skill audit: reload plugin %q to re-materialize after auto-lock: %v", name, err)
+			continue
+		}
+		if err := a.materializePluginDetached(p); err != nil {
+			log.Printf("ERROR: skill audit: re-materialize plugin %q after auto-lock: %v", name, err)
 		}
 	}
 

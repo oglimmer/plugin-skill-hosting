@@ -193,6 +193,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ targetPlugin }),
     }),
+  // Admin-only. Locking withdraws the skill from git, the external mirror, and
+  // MCP; unlocking restores it. The server returns the updated skill.
+  lockSkill: (pluginName: string, skillName: string, reason: string) =>
+    request<Skill>(`/api/plugins/${pluginName}/skills/${skillName}/lock`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  unlockSkill: (pluginName: string, skillName: string) =>
+    request<Skill>(`/api/plugins/${pluginName}/skills/${skillName}/lock`, {
+      method: 'DELETE',
+    }),
   listDeletedSkills: (pluginName: string) =>
     request<Skill[]>(`/api/plugins/${pluginName}/deleted-skills`),
   restoreSkill: (pluginName: string, skillName: string) =>

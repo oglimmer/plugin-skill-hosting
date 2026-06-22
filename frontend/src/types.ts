@@ -59,6 +59,15 @@ export interface Skill {
   deletedAt?: string
   deletedBy?: string
   deletedByName?: string
+  // Lock state. A locked skill is withdrawn from git, the external mirror, and
+  // MCP, but stays visible here flagged as locked. `lockSource` is 'admin' or
+  // 'audit'; `lockedByName` is the admin who locked it (absent for audit locks).
+  locked: boolean
+  lockedAt?: string
+  lockedBy?: string
+  lockedByName?: string
+  lockSource?: 'admin' | 'audit'
+  lockReason?: string
 }
 
 export interface SkillVersion {

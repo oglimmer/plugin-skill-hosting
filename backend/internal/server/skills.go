@@ -32,11 +32,13 @@ func (a *App) loadSkillsForPlugin(ctx context.Context, pluginID string) ([]Skill
 		       s.created_at, s.updated_at,
 		       s.created_by, cu.username,
 		       s.updated_by, uu.username,
-		       s.deleted_at, s.deleted_by, du.username
+		       s.deleted_at, s.deleted_by, du.username,
+		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason
 		FROM skills s
 		LEFT JOIN users cu ON cu.id = s.created_by
 		LEFT JOIN users uu ON uu.id = s.updated_by
 		LEFT JOIN users du ON du.id = s.deleted_by
+		LEFT JOIN users lu ON lu.id = s.locked_by
 		WHERE s.plugin_id = $1 AND s.deleted_at IS NULL
 		ORDER BY s.name ASC
 	`, pluginID)
@@ -49,11 +51,13 @@ func (a *App) loadDeletedSkillsForPlugin(ctx context.Context, pluginID string) (
 		       s.created_at, s.updated_at,
 		       s.created_by, cu.username,
 		       s.updated_by, uu.username,
-		       s.deleted_at, s.deleted_by, du.username
+		       s.deleted_at, s.deleted_by, du.username,
+		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason
 		FROM skills s
 		LEFT JOIN users cu ON cu.id = s.created_by
 		LEFT JOIN users uu ON uu.id = s.updated_by
 		LEFT JOIN users du ON du.id = s.deleted_by
+		LEFT JOIN users lu ON lu.id = s.locked_by
 		WHERE s.plugin_id = $1 AND s.deleted_at IS NOT NULL
 		ORDER BY s.deleted_at DESC
 	`, pluginID)
@@ -71,11 +75,14 @@ func (a *App) querySkills(ctx context.Context, query string, args ...interface{}
 		var createdBy, updatedBy, deletedBy sql.NullString
 		var createdByName, updatedByName, deletedByName sql.NullString
 		var deletedAt sql.NullTime
+		var lockedAt sql.NullTime
+		var lockedBy, lockedByName, lockSource sql.NullString
 		if err := rows.Scan(&s.ID, &s.PluginID, &s.Name, &s.Description, &s.Body, &s.ExtraFrontmatter,
 			&s.CreatedAt, &s.UpdatedAt,
 			&createdBy, &createdByName,
 			&updatedBy, &updatedByName,
-			&deletedAt, &deletedBy, &deletedByName); err != nil {
+			&deletedAt, &deletedBy, &deletedByName,
+			&lockedAt, &lockedBy, &lockedByName, &lockSource, &s.LockReason); err != nil {
 			return nil, err
 		}
 		if createdBy.Valid {
@@ -106,6 +113,23 @@ func (a *App) querySkills(ctx context.Context, query string, args ...interface{}
 			v := deletedByName.String
 			s.DeletedByName = &v
 		}
+		if lockedAt.Valid {
+			t := lockedAt.Time
+			s.LockedAt = &t
+			s.Locked = true
+		}
+		if lockedBy.Valid {
+			v := lockedBy.String
+			s.LockedBy = &v
+		}
+		if lockedByName.Valid {
+			v := lockedByName.String
+			s.LockedByName = &v
+		}
+		if lockSource.Valid {
+			v := lockSource.String
+			s.LockSource = &v
+		}
 		skills = append(skills, s)
 	}
 	return skills, rows.Err()
@@ -118,11 +142,13 @@ func (a *App) loadActiveSkill(ctx context.Context, pluginID, name string) (*Skil
 		       s.created_at, s.updated_at,
 		       s.created_by, cu.username,
 		       s.updated_by, uu.username,
-		       s.deleted_at, s.deleted_by, du.username
+		       s.deleted_at, s.deleted_by, du.username,
+		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason
 		FROM skills s
 		LEFT JOIN users cu ON cu.id = s.created_by
 		LEFT JOIN users uu ON uu.id = s.updated_by
 		LEFT JOIN users du ON du.id = s.deleted_by
+		LEFT JOIN users lu ON lu.id = s.locked_by
 		WHERE s.plugin_id = $1 AND s.name = $2 AND s.deleted_at IS NULL
 	`, pluginID, name)
 	if err != nil {
@@ -141,11 +167,13 @@ func (a *App) loadSkillByID(ctx context.Context, id string) (*Skill, error) {
 		       s.created_at, s.updated_at,
 		       s.created_by, cu.username,
 		       s.updated_by, uu.username,
-		       s.deleted_at, s.deleted_by, du.username
+		       s.deleted_at, s.deleted_by, du.username,
+		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason
 		FROM skills s
 		LEFT JOIN users cu ON cu.id = s.created_by
 		LEFT JOIN users uu ON uu.id = s.updated_by
 		LEFT JOIN users du ON du.id = s.deleted_by
+		LEFT JOIN users lu ON lu.id = s.locked_by
 		WHERE s.id = $1
 	`, id)
 	if err != nil {
@@ -311,6 +339,9 @@ func (a *App) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	if existing == nil {
 		return
 	}
+	if rejectIfLocked(w, existing) {
+		return
+	}
 
 	// Omitting extraFrontmatter from the payload preserves the existing value;
 	// explicitly sending "" clears it.
@@ -333,7 +364,8 @@ func (a *App) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := tx.ExecContext(r.Context(), `
 		UPDATE skills SET description = $1, body = $2, extra_frontmatter = $3,
-		                  updated_at = now(), updated_by = $4
+		                  updated_at = now(), updated_by = $4,
+		                  audit_lock_suppressed = FALSE
 		WHERE id = $5
 	`, req.Description, req.Body, extra, user.ID, existing.ID); err != nil {
 		serverErr(w, r, err, "db error")
@@ -369,6 +401,9 @@ func (a *App) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	existing := a.loadActiveSkillOrRespond(w, r, p.ID)
 	if existing == nil {
+		return
+	}
+	if rejectIfLocked(w, existing) {
 		return
 	}
 
@@ -428,6 +463,9 @@ func (a *App) handleMoveSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	skill := a.loadActiveSkillOrRespond(w, r, src.ID)
 	if skill == nil {
+		return
+	}
+	if rejectIfLocked(w, skill) {
 		return
 	}
 
@@ -708,6 +746,9 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		serverErr(w, r, err, "db error")
+		return
+	}
+	if sk, err := a.loadSkillByID(r.Context(), skillID); err == nil && rejectIfLocked(w, sk) {
 		return
 	}
 

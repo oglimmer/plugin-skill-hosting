@@ -124,6 +124,16 @@ type Skill struct {
 	DeletedAt        *time.Time `json:"deletedAt,omitempty"`
 	DeletedBy        *string    `json:"deletedBy,omitempty"`
 	DeletedByName    *string    `json:"deletedByName,omitempty"`
+	// Lock state. Locked is the convenience flag (LockedAt != nil); a locked
+	// skill is withdrawn from git, the external mirror, and MCP but stays
+	// visible in the web UI. LockSource is "admin" or "audit"; LockedBy/Name is
+	// the admin who locked it (nil when the audit locked it automatically).
+	Locked       bool       `json:"locked"`
+	LockedAt     *time.Time `json:"lockedAt,omitempty"`
+	LockedBy     *string    `json:"lockedBy,omitempty"`
+	LockedByName *string    `json:"lockedByName,omitempty"`
+	LockSource   *string    `json:"lockSource,omitempty"`
+	LockReason   string     `json:"lockReason,omitempty"`
 }
 
 type SkillVersion struct {

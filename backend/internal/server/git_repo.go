@@ -264,6 +264,12 @@ func (a *App) renderPluginInto(ctx context.Context, p *Plugin, targetDir string)
 			return err
 		}
 		for _, s := range skills {
+			// Locked skills are withdrawn from every git surface (internal repo
+			// and the external mirror, which both render through here). They stay
+			// in the DB and the web UI, just never get committed.
+			if s.Locked {
+				continue
+			}
 			dir := filepath.Join(skillsRoot, s.Name)
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err

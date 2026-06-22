@@ -202,6 +202,12 @@ func (a *App) resolveSkill(ctx context.Context, pluginID, name string) (*Skill, 
 	if err != nil {
 		return nil, err
 	}
+	// A locked skill is withdrawn from MCP entirely — to every read and write
+	// tool that routes through here it looks like it doesn't exist, matching how
+	// it has already vanished from git.
+	if s.Locked {
+		return nil, fmt.Errorf("skill %q not found", name)
+	}
 	return s, nil
 }
 
@@ -275,13 +281,18 @@ func (a *App) addToolGetPlugin(s *mcp.Server) {
 			Skills:      make([]mcpSkillSummary, 0, len(skills)),
 		}
 		for _, sk := range skills {
+			// Locked skills are hidden from MCP listings too, consistent with
+			// resolveSkill rejecting them on direct access.
+			if sk.Locked {
+				continue
+			}
 			out.Skills = append(out.Skills, mcpSkillSummary{
 				Name:        sk.Name,
 				Description: sk.Description,
 				UpdatedAt:   sk.UpdatedAt,
 			})
 		}
-		return okResult(fmt.Sprintf("plugin %q v%s, %d skill(s)", p.Name, p.Version, len(skills)), out)
+		return okResult(fmt.Sprintf("plugin %q v%s, %d skill(s)", p.Name, p.Version, len(out.Skills)), out)
 	}))
 }
 
@@ -432,7 +443,8 @@ func (a *App) addToolUpdateSkill(s *mcp.Server) {
 		}()
 
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE skills SET description = $1, body = $2, updated_at = now(), updated_by = $3
+			UPDATE skills SET description = $1, body = $2, updated_at = now(), updated_by = $3,
+			                  audit_lock_suppressed = FALSE
 			WHERE id = $4
 		`, in.Description, in.Body, user.ID, existing.ID); err != nil {
 			return nil, zero, fmt.Errorf("db error: %w", err)
