@@ -61,6 +61,14 @@ const tools = [
       <a href="#auth">Authentication</a> section for the full contract.
     </p>
 
+    <p class="muted">
+      <strong>Locked skills are invisible here.</strong> A skill locked by an admin or
+      the <a href="#audit">security audit</a> is omitted from <code>list_plugins</code>
+      and <code>get_plugin</code> skill lists, and <code>get_skill</code> /
+      <code>get_skill_file</code> return "not found" for it — only the web UI shows it
+      (flagged locked, read-only).
+    </p>
+
     <h3>Tools</h3>
     <div class="tool-grid">
       <div v-for="t in tools" :key="t.name" class="tool" :class="`tool--${t.mode}`">

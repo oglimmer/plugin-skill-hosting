@@ -104,6 +104,62 @@ import ParamRow from '../ParamRow.vue'
       </template>
     </Endpoint>
 
+    <aside class="callout">
+      <h4>Locking</h4>
+      <p>
+        A locked skill is withdrawn from the git repo, the external mirror, and the
+        MCP server, but stays visible in the web UI flagged as locked and read-only.
+        While a skill is locked, every write below (update, delete, move, revert, and
+        file writes) returns <code>403</code>. Locks are set manually by an admin or
+        automatically by the <a href="#audit">security audit</a>; only an admin can
+        lock or unlock. Locking does not bump the plugin version.
+      </p>
+    </aside>
+
+    <Endpoint
+      method="POST"
+      path="/api/plugins/{name}/skills/{skill}/lock"
+      summary="Lock a skill, withdrawing it from git, the external mirror, and MCP. Admin-only."
+    >
+      <template #request>
+<pre>{
+  "reason": "under security review"   // optional, shown in the UI
+}</pre>
+      </template>
+      <template #response>
+        <p><code>200 OK</code> with the updated skill object (<code>locked: true</code>).</p>
+      </template>
+      <template #errors>
+        <ul class="dev-list">
+          <li><code>403</code> — caller is not an admin</li>
+          <li><code>404</code> — plugin or skill not found</li>
+        </ul>
+      </template>
+    </Endpoint>
+
+    <Endpoint
+      method="DELETE"
+      path="/api/plugins/{name}/skills/{skill}/lock"
+      summary="Unlock a skill, restoring it to git, the external mirror, and MCP. Admin-only."
+    >
+      <template #response>
+        <p><code>200 OK</code> with the updated skill object (<code>locked: false</code>).</p>
+      </template>
+      <template #notes>
+        <p>
+          If the audit had auto-locked the skill, unlocking acknowledges it: later
+          audit sweeps will not re-lock it until the skill is next edited.
+        </p>
+      </template>
+      <template #errors>
+        <ul class="dev-list">
+          <li><code>403</code> — caller is not an admin</li>
+          <li><code>404</code> — plugin or skill not found</li>
+          <li><code>409</code> — skill is not locked</li>
+        </ul>
+      </template>
+    </Endpoint>
+
     <Endpoint
       method="GET"
       path="/api/plugins/{name}/deleted-skills"

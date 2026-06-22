@@ -60,6 +60,15 @@ const envVars = [
         is unconfigured the alert is logged instead, never dropped.
       </li>
       <li>
+        A skill scoring at or above the threshold is also <strong>auto-locked</strong>:
+        withdrawn from the git repo, the external mirror, and the MCP server, but
+        left visible (read-only, flagged locked) in the web UI. An admin clears it
+        with <code>DELETE /api/plugins/{name}/skills/{skill}/lock</code> — that
+        acknowledges the finding, so later sweeps won't re-lock it until the skill
+        is next edited. Admins can also lock a skill manually at any time. See the
+        <a href="#rest/skills">skill endpoints</a> for the lock/unlock API.
+      </li>
+      <li>
         The same signal is also published on <code>/metrics</code> for alerting
         that doesn't depend on SMTP: <code>psh_skill_audit_flagged_skills</code>
         (skills at/above the threshold as of the last sweep — alert on

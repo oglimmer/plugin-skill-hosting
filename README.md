@@ -159,6 +159,8 @@ Tools exposed:
 
 Plugins themselves are read-only over MCP (no `create_plugin` / `delete_plugin`), and **nothing can be deleted via MCP** — destructive operations stay behind the web UI. Every write tool runs the same code path as the corresponding REST handler: it bumps the plugin version, snapshots a new skill version row, and re-materialises the bare git repo, so changes are visible to `git clone` and `marketplace.json` immediately.
 
+**Locked skills are invisible over MCP.** A skill locked by an admin or the [security audit](#skill-security-audit-optional) is omitted from `list_plugins` and `get_plugin` skill lists, and `get_skill` / `get_skill_file` return "not found" for it — only the web UI shows it (flagged locked, read-only).
+
 Behind a reverse proxy, the `/mcp` location needs response buffering off and long read/send timeouts because the MCP transport keeps a long-lived SSE GET stream open. Both `frontend/nginx.conf` (for Compose) and the helm chart's ingress annotations (`nginx.ingress.kubernetes.io/proxy-buffering`, `proxy-read-timeout`, `proxy-send-timeout`) already set those.
 
 ## External git mirror (optional)
@@ -239,6 +241,7 @@ Mechanics:
 - Each call scores the skill `0–100` (`low`/`medium`/`high`/`critical`), with threat categories, a one-line summary, and per-finding details. The server recomputes the level from the score, so the model can't under-report severity.
 - **Unlike the skill validator**, the audit sends supporting-file *contents* (scripts, references) to the model — malicious payloads typically hide there rather than in `SKILL.md`. Text files are capped per file; binary files are listed by path/size only. Note that this means skill file contents leave your infrastructure on each run.
 - Skills scoring at or above `AUDIT_ALERT_THRESHOLD` trigger a single batched alert email per sweep. When SMTP is unconfigured (or no recipients are set) the alert is written to the logs instead, never dropped.
+- A skill scoring at or above the threshold is also **auto-locked**: withdrawn from the git repo, the external mirror, and the MCP server, but kept visible (read-only, flagged locked) in the web UI. An admin unlocks it with `DELETE /api/plugins/:name/skills/:skill/lock`, which acknowledges the finding so later sweeps won't re-lock it until the skill is next edited. Admins can also lock a skill manually with `POST .../lock`. See [§API surface](#api-surface).
 - The same signal is also published on `/metrics` for alerting that doesn't depend on SMTP: `psh_skill_audit_flagged_skills` (skills at/above the threshold as of the last sweep — alert on `> 0`), `psh_skill_audit_risk_score{plugin,skill,level}` (latest per-skill score, repopulated each sweep), and `psh_skill_audit_last_run_timestamp_seconds` (so a stalled sweep is detectable via `time() - metric > 2 * interval`).
 - A failed audit for one skill (API error, unparseable output) is recorded with its error and skipped — the sweep continues. Overlapping sweeps are prevented; a manual trigger while one is running returns `409`.
 
@@ -391,6 +394,8 @@ Token-gated (Bearer JWT or API token; HTTP Basic with token as password is also 
 - `POST /api/plugins/:name/skills` `{name, description, body}`
 - `PUT  /api/plugins/:name/skills/:skill` `{description, body}`
 - `DELETE /api/plugins/:name/skills/:skill` — soft-delete
+- `POST /api/plugins/:name/skills/:skill/lock` `{reason?}` — lock a skill (admin only); withdraws it from git, the external mirror, and MCP while leaving it read-only in the UI. Auto-applied by the audit when a skill crosses the threshold. A locked skill rejects all writes with `403`.
+- `DELETE /api/plugins/:name/skills/:skill/lock` — unlock a skill (admin only); restores it to git/MCP. Unlocking an audit lock suppresses re-locking until the skill is next edited.
 - `GET /api/plugins/:name/deleted-skills` — list soft-deleted skills for the restore UI
 - `POST /api/plugins/:name/skills/:skill/restore` — un-soft-delete
 - `GET /api/plugins/:name/skills/:skill/versions` — full edit history (newest first)
