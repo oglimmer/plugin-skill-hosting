@@ -126,6 +126,50 @@ func TestSkillLock_Integration(t *testing.T) {
 	}
 }
 
+// deleteSkill calls handleDeleteSkill as the given user and returns the
+// recorder. The route isn't admin-gated, so the handler decides whether a
+// locked skill may be removed based on the caller's admin flag.
+func deleteSkill(t *testing.T, app *App, user *User, plugin, skill string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	app.handleDeleteSkill(rec, authedReq(http.MethodDelete,
+		"/api/plugins/"+plugin+"/skills/"+skill,
+		"", user, "name", plugin, "skill", skill))
+	return rec
+}
+
+// TestDeleteLockedSkill_AdminOnly verifies that a locked skill can be deleted by
+// an admin but not by a non-admin: deletion is removal (it can't republish the
+// withdrawn content), so it's the one mutation a lock doesn't block for admins.
+func TestDeleteLockedSkill_AdminOnly(t *testing.T) {
+	pool := requireTestDB(t)
+	app := newIntegrationApp(t, pool)
+	admin := seedUser(t, pool, "lockdel-admin", true)
+	member := seedUser(t, pool, "lockdel-member", false)
+
+	createPluginForMove(t, app, admin, "lockdel-plug")
+	createSkillForMove(t, app, admin, "lockdel-plug", "lockdel-doomed")
+	if rec := lockSkill(t, app, admin, "lockdel-plug", "lockdel-doomed", "under review"); rec.Code != http.StatusOK {
+		t.Fatalf("lock status = %d, want 200; body=%s", rec.Code, readBody(rec))
+	}
+
+	// A non-admin is refused with 403 and the skill survives.
+	if rec := deleteSkill(t, app, member, "lockdel-plug", "lockdel-doomed"); rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin delete of locked skill = %d, want 403; body=%s", rec.Code, readBody(rec))
+	}
+	if !pluginHasActiveSkill(t, app, "lockdel-plug", "lockdel-doomed") {
+		t.Fatalf("locked skill was deleted by a non-admin")
+	}
+
+	// An admin deletes it outright.
+	if rec := deleteSkill(t, app, admin, "lockdel-plug", "lockdel-doomed"); rec.Code != http.StatusNoContent {
+		t.Fatalf("admin delete of locked skill = %d, want 204; body=%s", rec.Code, readBody(rec))
+	}
+	if pluginHasActiveSkill(t, app, "lockdel-plug", "lockdel-doomed") {
+		t.Errorf("locked skill still active after admin delete")
+	}
+}
+
 // TestAutoLockSuppression_Integration verifies the audit auto-lock and the
 // "admin unlock suppresses re-lock until the skill is edited" rule.
 func TestAutoLockSuppression_Integration(t *testing.T) {

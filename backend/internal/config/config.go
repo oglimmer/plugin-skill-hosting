@@ -111,6 +111,13 @@ type Config struct {
 	AuditThreshold   int
 	AuditAlertEmails []string
 
+	// AuditOnChange, when true (and an Anthropic API key is configured),
+	// audits a single skill immediately whenever it is created or changed
+	// (its SKILL.md, metadata, or any attached file), independent of the
+	// scheduled sweep. Off by default. Verdicts reuse AuditThreshold and
+	// AuditAlertEmails.
+	AuditOnChange bool
+
 	// SMTP settings for outbound notification email. Empty SMTPHost disables
 	// all email; the audit job then logs alerts instead of sending them.
 	SMTPHost     string
@@ -174,6 +181,7 @@ func Load() Config {
 		AuditInterval:    parseDuration(getenv("AUDIT_INTERVAL", "24h"), 24*time.Hour),
 		AuditThreshold:   parseInt(getenv("AUDIT_ALERT_THRESHOLD", "70"), 70),
 		AuditAlertEmails: parseDomainList(getenv("AUDIT_ALERT_EMAILS", "")),
+		AuditOnChange:    getenv("AUDIT_ON_CHANGE", "false") == "true",
 
 		SMTPHost:     strings.TrimSpace(getenv("SMTP_HOST", "")),
 		SMTPPort:     parseInt(getenv("SMTP_PORT", "587"), 587),

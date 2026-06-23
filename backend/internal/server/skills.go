@@ -315,6 +315,7 @@ func (a *App) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	metrics.SkillMutationsTotal.WithLabelValues("create", "success").Inc()
+	a.auditSkillOnChange(id)
 	if s, err := a.loadSkillByID(r.Context(), id); err == nil {
 		writeJSON(w, http.StatusOK, s)
 		return
@@ -390,6 +391,7 @@ func (a *App) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.SkillMutationsTotal.WithLabelValues("update", "success").Inc()
+	a.auditSkillOnChange(existing.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -403,7 +405,10 @@ func (a *App) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	if existing == nil {
 		return
 	}
-	if rejectIfLocked(w, existing) {
+	// An admin may delete a locked skill directly; non-admins must get it
+	// unlocked first. Deletion is removal, not a content change, so it's safe
+	// to allow even while the skill is withdrawn from git/MCP/the mirror.
+	if rejectIfLockedForNonAdmin(w, existing, user) {
 		return
 	}
 

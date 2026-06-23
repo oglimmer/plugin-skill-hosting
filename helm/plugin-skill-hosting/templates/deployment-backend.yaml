@@ -173,9 +173,13 @@ spec:
         {{- end }}
         - name: AUDIT_ENABLED
           value: {{ .Values.audit.enabled | quote }}
+        - name: AUDIT_ON_CHANGE
+          value: {{ .Values.audit.onChange | default false | quote }}
         {{- if .Values.audit.enabled }}
         - name: AUDIT_INTERVAL
           value: {{ .Values.audit.interval | default "24h" | quote }}
+        {{- end }}
+        {{- if or .Values.audit.enabled .Values.audit.onChange }}
         - name: AUDIT_ALERT_THRESHOLD
           value: {{ .Values.audit.alertThreshold | default 70 | quote }}
         {{- with .Values.audit.alertEmails }}

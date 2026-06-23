@@ -28,6 +28,18 @@ func rejectIfLocked(w http.ResponseWriter, s *Skill) bool {
 	return false
 }
 
+// rejectIfLockedForNonAdmin is like rejectIfLocked but lets an admin proceed.
+// An admin may delete a locked skill outright — e.g. to purge one the audit
+// auto-locked — without first unlocking it; a non-admin still gets the 403.
+// Reserved for removal (delete): content-mutating handlers use rejectIfLocked
+// so a withdrawn skill can't be edited back into a published state.
+func rejectIfLockedForNonAdmin(w http.ResponseWriter, s *Skill, user *User) bool {
+	if user != nil && user.IsAdmin {
+		return false
+	}
+	return rejectIfLocked(w, s)
+}
+
 type lockSkillReq struct {
 	Reason string `json:"reason"`
 }

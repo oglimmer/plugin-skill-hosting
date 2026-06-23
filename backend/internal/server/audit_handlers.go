@@ -15,6 +15,7 @@ func (a *App) handleListAuditResults(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":   a.Cfg.AuditEnabled,
+		"onChange":  a.Cfg.AuditOnChange,
 		"threshold": a.Cfg.AuditThreshold,
 		"running":   a.auditRunning.Load(),
 		"results":   results,

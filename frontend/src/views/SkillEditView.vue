@@ -603,7 +603,8 @@ watch(() => [props.pluginName, props.skillName], load)
           v-if="isEdit"
           type="button"
           class="se-btn se-btn--danger"
-          :disabled="locked"
+          :disabled="locked && !isAdmin"
+          :title="locked && isAdmin ? 'Delete this locked skill (admin)' : undefined"
           @click="deleteSkill"
         >delete</button>
         <button

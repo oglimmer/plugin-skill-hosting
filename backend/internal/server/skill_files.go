@@ -373,6 +373,7 @@ func (a *App) handleUpsertSkillFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.SkillFileMutationsTotal.WithLabelValues("upsert", "success").Inc()
+	a.auditSkillOnChange(s.ID)
 	writeJSON(w, http.StatusOK, f)
 }
 
@@ -436,6 +437,7 @@ func (a *App) handleDeleteSkillFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.SkillFileMutationsTotal.WithLabelValues("delete", "success").Inc()
+	a.auditSkillOnChange(s.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

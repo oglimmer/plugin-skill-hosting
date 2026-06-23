@@ -226,6 +226,7 @@ The job is **on by default** but is a no-op without `ANTHROPIC_API_KEY` (it logs
 | --- | --- | --- |
 | `AUDIT_ENABLED` | no (set to `false` to disable) | `true` |
 | `AUDIT_INTERVAL` | no | `24h` (Go duration; `168h` = weekly) |
+| `AUDIT_ON_CHANGE` | no (set to `true` to enable) | `false` |
 | `AUDIT_ALERT_THRESHOLD` | no | `70` (risk score 0–100) |
 | `AUDIT_ALERT_EMAILS` | for alerts | — (comma-separated recipients) |
 | `SMTP_HOST` | for email | — (empty disables email) |
@@ -238,6 +239,7 @@ The job is **on by default** but is a no-op without `ANTHROPIC_API_KEY` (it logs
 Mechanics:
 
 - One Claude call per skill, on `AUDIT_INTERVAL`. On startup the sweep runs immediately only if the most recent stored audit is older than one interval (or none exists), so frequent restarts don't re-audit on every launch.
+- **On-change auditing** (`AUDIT_ON_CHANGE=true`, off by default) audits a *single* skill the moment it is created or changed — its `SKILL.md`, metadata, or any attached file — instead of waiting for the next scheduled sweep. It runs in the background (the mutation request returns immediately) and reuses the same threshold, auto-lock, and alert behavior below. It is independent of `AUDIT_ENABLED`: you can run on-change auditing with the scheduled sweep off, or both together. Like the sweep, it needs `ANTHROPIC_API_KEY`.
 - Each call scores the skill `0–100` (`low`/`medium`/`high`/`critical`), with threat categories, a one-line summary, and per-finding details. The server recomputes the level from the score, so the model can't under-report severity.
 - **Unlike the skill validator**, the audit sends supporting-file *contents* (scripts, references) to the model — malicious payloads typically hide there rather than in `SKILL.md`. Text files are capped per file; binary files are listed by path/size only. Note that this means skill file contents leave your infrastructure on each run.
 - Skills scoring at or above `AUDIT_ALERT_THRESHOLD` trigger a single batched alert email per sweep. When SMTP is unconfigured (or no recipients are set) the alert is written to the logs instead, never dropped.
@@ -394,7 +396,7 @@ Token-gated (Bearer JWT or API token; HTTP Basic with token as password is also 
 - `POST /api/plugins/:name/skills` `{name, description, body}`
 - `PUT  /api/plugins/:name/skills/:skill` `{description, body}`
 - `DELETE /api/plugins/:name/skills/:skill` — soft-delete
-- `POST /api/plugins/:name/skills/:skill/lock` `{reason?}` — lock a skill (admin only); withdraws it from git, the external mirror, and MCP while leaving it read-only in the UI. Auto-applied by the audit when a skill crosses the threshold. A locked skill rejects all writes with `403`.
+- `POST /api/plugins/:name/skills/:skill/lock` `{reason?}` — lock a skill (admin only); withdraws it from git, the external mirror, and MCP while leaving it read-only in the UI. Auto-applied by the audit when a skill crosses the threshold. A locked skill rejects content writes with `403`, except that an admin may still **delete** it outright (removal can't republish withdrawn content).
 - `DELETE /api/plugins/:name/skills/:skill/lock` — unlock a skill (admin only); restores it to git/MCP. Unlocking an audit lock suppresses re-locking until the skill is next edited.
 - `GET /api/plugins/:name/deleted-skills` — list soft-deleted skills for the restore UI
 - `POST /api/plugins/:name/skills/:skill/restore` — un-soft-delete

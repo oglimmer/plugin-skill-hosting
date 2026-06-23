@@ -171,7 +171,12 @@ mcpOAuth:
 audit:
   enabled: true
   interval: 24h          # Go duration: 24h (daily), 168h (weekly)
-  alertThreshold: 70     # 0-100; alert when a skill's risk score >= this
+  # onChange audits a single skill immediately whenever it is created or
+  # changed (its SKILL.md, metadata, or any attached file), independent of the
+  # scheduled sweep above. Off by default. Uses alertThreshold/alertEmails too,
+  # and also requires ANTHROPIC_API_KEY in the sealed secret.
+  onChange: false
+  alertThreshold: 70     # 0-100; alert (and auto-lock) when a skill's risk score >= this
   alertEmails: []        # recipients of threat alerts
     # - security@example.com
 

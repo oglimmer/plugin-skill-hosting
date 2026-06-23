@@ -58,6 +58,17 @@ type auditTarget struct {
 // so frequent restarts don't re-audit on every launch; otherwise it waits for
 // the next tick. Mirrors the StartOAuthGC pattern.
 func (a *App) StartSkillAudit(ctx context.Context, wg *sync.WaitGroup) {
+	// The on-change auditor has no goroutine of its own (it fires from skill
+	// mutation handlers), but log its status here alongside the scheduled one
+	// so the boot log states clearly which audit paths are live. It is
+	// independent of AuditEnabled, so report it before that early return.
+	if a.Cfg.AuditOnChange {
+		if strings.TrimSpace(a.Cfg.AnthropicAPIKey) == "" {
+			log.Printf("WARN: AUDIT_ON_CHANGE=true but ANTHROPIC_API_KEY is empty — on-change audit disabled")
+		} else {
+			log.Printf("on-change skill audit enabled: threshold=%d", a.Cfg.AuditThreshold)
+		}
+	}
 	if !a.Cfg.AuditEnabled {
 		return
 	}
@@ -189,6 +200,95 @@ func (a *App) auditAllSkills(ctx context.Context, trigger string) {
 	}
 	log.Printf("skill audit (%s): done — %d skills, %d at/above threshold %d",
 		trigger, len(targets), len(flagged), a.Cfg.AuditThreshold)
+}
+
+// auditOnChangeEnabled reports whether the event-driven (on-change) auditor is
+// active: the feature flag is set AND an Anthropic API key is configured (the
+// audit can't run without the model). Independent of AuditEnabled, which only
+// governs the scheduled sweep.
+func (a *App) auditOnChangeEnabled() bool {
+	return a.Cfg.AuditOnChange && strings.TrimSpace(a.Cfg.AnthropicAPIKey) != ""
+}
+
+// auditSkillOnChange triggers a background security audit of a single skill in
+// response to a create or change (its SKILL.md/metadata or any attached file).
+// It is a no-op unless AUDIT_ON_CHANGE is enabled and an API key is set, so
+// callers can invoke it unconditionally after a successful mutation. The audit
+// runs detached from the request: it outlives the HTTP response so the user
+// isn't blocked on a ~Claude round-trip, and any failure is logged, never
+// surfaced to the (already-returned) request.
+func (a *App) auditSkillOnChange(skillID string) {
+	if !a.auditOnChangeEnabled() {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+		defer cancel()
+		a.auditSingleSkill(ctx, skillID, "on-change")
+	}()
+}
+
+// auditSingleSkill audits one skill, stores the verdict, and — when the score
+// reaches the threshold — auto-locks it, re-materializes its plugin so the
+// skill is withdrawn from git/MCP/the external mirror, and alerts. It mirrors
+// the per-skill body of auditAllSkills but for a single target; it does NOT
+// reset the per-skill risk gauges (that would wipe other skills' series) and
+// does not touch the sweep-wide flagged-skills gauge. trigger labels metrics.
+func (a *App) auditSingleSkill(ctx context.Context, skillID, trigger string) {
+	t, err := a.loadAuditTargetByID(ctx, skillID)
+	if err != nil {
+		log.Printf("ERROR: skill audit (%s): load skill %s: %v", trigger, skillID, err)
+		return
+	}
+
+	res := a.auditOneSkill(ctx, t)
+	if err := a.storeAuditResult(ctx, t, res); err != nil {
+		log.Printf("ERROR: skill audit (%s): store result for %s/%s: %v", trigger, t.PluginName, t.SkillName, err)
+	}
+	metrics.SkillAuditRunsTotal.WithLabelValues(trigger).Inc()
+	if res.Error != "" {
+		return
+	}
+	metrics.SkillAuditRiskScore.
+		WithLabelValues(t.PluginName, t.SkillName, res.RiskLevel).
+		Set(float64(res.RiskScore))
+	if res.RiskScore < a.Cfg.AuditThreshold {
+		return
+	}
+
+	// Flagged: auto-lock (a no-op if already locked or an admin acknowledged a
+	// prior audit lock, so this never overrides a manual decision), then drop
+	// the skill from the served git tree and mirror, and alert.
+	reason := res.Summary
+	if reason == "" {
+		reason = fmt.Sprintf("auto-locked by security audit: risk score %d (%s)", res.RiskScore, res.RiskLevel)
+	}
+	locked, err := a.autoLockSkill(ctx, t.SkillID, reason)
+	if err != nil {
+		log.Printf("ERROR: skill audit (%s): auto-lock %s/%s: %v", trigger, t.PluginName, t.SkillName, err)
+	} else if locked {
+		log.Printf("skill audit (%s): auto-locked %s/%s (risk %d)", trigger, t.PluginName, t.SkillName, res.RiskScore)
+		if p, err := a.loadPluginByName(ctx, t.PluginName); err != nil {
+			log.Printf("ERROR: skill audit (%s): reload plugin %q to re-materialize after auto-lock: %v", trigger, t.PluginName, err)
+		} else if err := a.materializePluginDetached(p); err != nil {
+			log.Printf("ERROR: skill audit (%s): re-materialize plugin %q after auto-lock: %v", trigger, t.PluginName, err)
+		}
+	}
+	a.sendAuditAlert([]AuditResult{res})
+}
+
+// loadAuditTargetByID returns the single non-deleted skill identified by id,
+// with the fields the auditor needs. Returns sql.ErrNoRows if the skill (or its
+// plugin) is missing or soft-deleted.
+func (a *App) loadAuditTargetByID(ctx context.Context, skillID string) (auditTarget, error) {
+	var t auditTarget
+	err := a.DB.QueryRowContext(ctx, `
+		SELECT s.id, p.name, s.name, s.description, s.body
+		FROM skills s
+		JOIN plugins p ON p.id = s.plugin_id
+		WHERE s.id = $1 AND s.deleted_at IS NULL AND p.deleted_at IS NULL
+	`, skillID).Scan(&t.SkillID, &t.PluginName, &t.SkillName, &t.Description, &t.Body)
+	return t, err
 }
 
 // loadAuditTargets returns every non-deleted skill (across all non-deleted
@@ -348,7 +448,7 @@ func emailDisabledReason(configured bool, recipients int) string {
 // buildAuditAlertBody renders the plain-text alert email.
 func buildAuditAlertBody(marketplace, baseURL string, threshold int, flagged []AuditResult) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "The scheduled security audit on %s flagged %d skill(s) with a risk score at or above %d.\n\n",
+	fmt.Fprintf(&sb, "The security audit on %s flagged %d skill(s) with a risk score at or above %d.\n\n",
 		marketplace, len(flagged), threshold)
 	for _, r := range flagged {
 		fmt.Fprintf(&sb, "• %s / %s — risk %d (%s)\n", r.PluginName, r.SkillName, r.RiskScore, strings.ToUpper(r.RiskLevel))

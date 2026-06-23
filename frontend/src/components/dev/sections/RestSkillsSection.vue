@@ -109,8 +109,10 @@ import ParamRow from '../ParamRow.vue'
       <p>
         A locked skill is withdrawn from the git repo, the external mirror, and the
         MCP server, but stays visible in the web UI flagged as locked and read-only.
-        While a skill is locked, every write below (update, delete, move, revert, and
-        file writes) returns <code>403</code>. Locks are set manually by an admin or
+        While a skill is locked, content writes below (update, move, revert, and
+        file writes) return <code>403</code>. Deleting is the exception: an admin may
+        delete a locked skill directly (a non-admin still gets <code>403</code>), since
+        removal can't republish withdrawn content. Locks are set manually by an admin or
         automatically by the <a href="#audit">security audit</a>; only an admin can
         lock or unlock. Locking does not bump the plugin version.
       </p>
