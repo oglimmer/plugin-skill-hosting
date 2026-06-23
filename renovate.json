@@ -24,16 +24,18 @@
         "minor",
         "patch",
         "pin",
+        "pinDigest",
         "digest"
       ],
       "groupName": "{{manager}} non-major dependencies"
     },
     {
-      "description": "Automerge minor, patch, pin, digest updates (low-risk, non-major)",
+      "description": "Automerge minor, patch, pin, pinDigest, digest updates (low-risk, non-major)",
       "matchUpdateTypes": [
         "minor",
         "patch",
         "pin",
+        "pinDigest",
         "digest"
       ],
       "automerge": true
@@ -59,18 +61,31 @@
       "automerge": false
     },
     {
+      "description": "Keep Docker :latest live — never pin a moving tag to a digest",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchCurrentValue": "/^latest$/",
+      "pinDigests": false
+    },
+    {
+      "description": "No release-age delay on Docker digest pins — a pin records which image a tag resolves to, not a new version (version bumps keep their soak)",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "minimumReleaseAge": "0 days"
+    },
+    {
       "description": "Isolate major updates behind Dependency Dashboard approval",
       "matchUpdateTypes": [
         "major"
       ],
       "dependencyDashboardApproval": true
-    },
-    {
-      "description": "Pin Postgres to the 16.x line (compose.yml uses postgres:16-alpine)",
-      "matchPackageNames": [
-        "postgres"
-      ],
-      "allowedVersions": "/^16(\\.|-|$)/"
     }
   ],
   "minimumReleaseAge": "7 days",
