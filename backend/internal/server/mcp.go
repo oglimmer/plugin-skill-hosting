@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -154,7 +155,18 @@ func toolText(text string) []mcp.Content {
 }
 
 func okResult[T any](text string, out T) (*mcp.CallToolResult, T, error) {
-	return &mcp.CallToolResult{Content: toolText(text)}, out, nil
+	// `out` is returned as StructuredContent by the SDK, but many MCP clients
+	// surface only the text Content blocks to the model and ignore the
+	// structured payload. The SDK embeds the JSON into a text block on its own
+	// only when Content is left nil (see server.go); because we always set a
+	// human-readable summary here, that fallback never fires and such clients
+	// would see just the summary line (e.g. "5 plugin(s)") with none of the
+	// data. So render both: the summary, then the indented JSON beneath it.
+	body, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return &mcp.CallToolResult{Content: toolText(text)}, out, nil
+	}
+	return &mcp.CallToolResult{Content: toolText(text + "\n\n" + string(body))}, out, nil
 }
 
 // instrumentMCP wraps a tool handler so each call records a count + duration
