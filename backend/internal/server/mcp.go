@@ -417,6 +417,7 @@ func (a *App) addToolCreateSkill(s *mcp.Server) {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
 		metrics.SkillMutationsTotal.WithLabelValues("create", "success").Inc()
+		a.auditSkillOnChange(id)
 		return okResult(
 			fmt.Sprintf("created skill %q in %q (plugin now v%s)", name, p.Name, p.Version),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "skill created"},
@@ -476,6 +477,7 @@ func (a *App) addToolUpdateSkill(s *mcp.Server) {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
 		metrics.SkillMutationsTotal.WithLabelValues("update", "success").Inc()
+		a.auditSkillOnChange(existing.ID)
 		return okResult(
 			fmt.Sprintf("updated skill %q in %q (plugin now v%s)", existing.Name, p.Name, p.Version),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "skill updated"},
@@ -653,6 +655,7 @@ func (a *App) addToolUpsertSkillFile(s *mcp.Server) {
 			return nil, zero, fmt.Errorf("git materialize: %w", err)
 		}
 		metrics.SkillFileMutationsTotal.WithLabelValues("upsert", "success").Inc()
+		a.auditSkillOnChange(sk.ID)
 		return okResult(
 			fmt.Sprintf("wrote %s to %s/%s (plugin now v%s)", pth, p.Name, sk.Name, p.Version),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "file written"},
