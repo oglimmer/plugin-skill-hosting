@@ -111,7 +111,7 @@ COMMANDS:
     stop                Stop the local backend process
     status              Show whether the local backend is running
     logs                Tail the local backend log file
-    test                Run backend tests
+    test                Run backend and frontend tests
 
 BUILD OPTIONS:
     -f, --frontend          Build and deploy frontend only
@@ -465,8 +465,33 @@ cmd_dev_logs() {
 }
 
 cmd_dev_test() {
+    # Run both backend and frontend test suites. Designed to work on a fresh
+    # clone and when invoked non-interactively (e.g. from a backend process /
+    # CI): dependencies are installed automatically and no command prompts.
+
+    # Backend: Go downloads modules on demand, so `go test` works on a fresh
+    # clone with no extra setup.
+    if ! command -v go >/dev/null 2>&1; then
+        log_error "go is required to run backend tests but was not found in PATH"
+        exit 1
+    fi
     log_info "Running backend tests..."
     (cd "$BACKEND_DIR" && go test ./...)
+
+    # Frontend: install dependencies from the lockfile if missing (fresh clone),
+    # then run vitest once. `npm ci` and `vitest run` are both non-interactive.
+    if ! command -v npm >/dev/null 2>&1; then
+        log_error "npm is required to run frontend tests but was not found in PATH"
+        exit 1
+    fi
+    if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
+        log_info "Installing frontend dependencies (npm ci)..."
+        (cd "$FRONTEND_DIR" && npm ci)
+    fi
+    log_info "Running frontend tests..."
+    (cd "$FRONTEND_DIR" && npm run test)
+
+    log_success "All tests passed"
 }
 
 cmd_helm_push() {
