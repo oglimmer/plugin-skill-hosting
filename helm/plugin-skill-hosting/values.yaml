@@ -216,8 +216,11 @@ frontend:
 # Bundled Postgres (single-replica, PVC-backed). Set enabled=false to use an
 # external database — then provide the full DSN via the sealed secret's
 # DATABASE_URL key and clear postgres.* below.
+# Migrated to the central shared PostgreSQL (postgres.default.svc) — DATABASE_URL
+# is supplied via the sealed secret (db plugin_skill_hosting_prod / user
+# plugin-skill-hosting-app).
 postgres:
-  enabled: true
+  enabled: false
   image:
     repository: postgres
     tag: "16-alpine"
