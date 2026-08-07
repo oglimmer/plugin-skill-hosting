@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -231,5 +233,100 @@ func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func gitHead(t *testing.T, repo string) string {
+	t.Helper()
+	out, err := runGit(context.Background(), repo, "rev-parse", "refs/heads/main")
+	if err != nil {
+		t.Fatalf("rev-parse in %s: %v", repo, err)
+	}
+	return strings.TrimSpace(out)
+}
+
+// publishOnce mirrors the git half of materializePluginInner (which cannot be
+// called directly here — renderPluginInto loads skills from the DB) so these
+// tests exercise the real ensureBareRepo/ensureWorkTree/commit/push sequence.
+func publishOnce(t *testing.T, a *App, name, content string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := a.ensureBareRepo(ctx, name); err != nil {
+		t.Fatalf("ensureBareRepo: %v", err)
+	}
+	if err := a.ensureWorkTree(ctx, name); err != nil {
+		t.Fatalf("ensureWorkTree: %v", err)
+	}
+	work := a.workPath(name)
+	if err := wipeWorkTree(work); err != nil {
+		t.Fatalf("wipeWorkTree: %v", err)
+	}
+	mustWrite(t, filepath.Join(work, "README.md"), content)
+	if _, err := runGit(ctx, work, "add", "-A"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := runGit(ctx, work, "commit", "-m", "Update plugin contents"); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if _, err := runGit(ctx, work, "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+}
+
+// A missing work tree is routine — a pod restart or a recycled volume is
+// enough. Publishing after that must extend the branch, not replace it:
+// clients fetch from the bare repo and Claude Code records the commit sha at
+// install time, so an orphaned history breaks every pinned sha.
+func TestEnsureWorkTree_PreservesHistoryAfterWorkTreeLoss(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	ctx := context.Background()
+	a := &App{Cfg: config.Config{DataDir: t.TempDir()}}
+	const name = "histplug"
+
+	publishOnce(t, a, name, "v1")
+	bare := a.repoPath(name)
+	first := gitHead(t, bare)
+
+	// The restart: work tree gone, bare repo (durable /data) intact.
+	if err := os.RemoveAll(a.workPath(name)); err != nil {
+		t.Fatalf("remove work tree: %v", err)
+	}
+
+	publishOnce(t, a, name, "v2")
+	second := gitHead(t, bare)
+
+	if second == first {
+		t.Fatalf("expected a new commit after content change, still at %s", first)
+	}
+	if _, err := runGit(ctx, bare, "cat-file", "-e", first); err != nil {
+		t.Fatalf("previously published commit %s no longer exists in the repo", first)
+	}
+	if _, err := runGit(ctx, bare, "merge-base", "--is-ancestor", first, second); err != nil {
+		t.Fatalf("history was rewritten: %s is no longer an ancestor of %s", first, second)
+	}
+}
+
+// The seeding path must no-op on a bare repo with no history, so the very
+// first publish still produces a root commit.
+func TestEnsureWorkTree_FirstPublishCreatesRootCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	a := &App{Cfg: config.Config{DataDir: t.TempDir()}}
+	const name = "freshplug"
+
+	publishOnce(t, a, name, "first")
+
+	if head := gitHead(t, a.repoPath(name)); head == "" {
+		t.Fatal("expected refs/heads/main to exist after first publish")
+	}
+	out, err := runGit(context.Background(), a.repoPath(name), "rev-list", "--count", "refs/heads/main")
+	if err != nil {
+		t.Fatalf("rev-list: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "1" {
+		t.Errorf("expected exactly 1 commit on first publish, got %s", got)
 	}
 }

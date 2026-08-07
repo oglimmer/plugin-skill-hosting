@@ -126,6 +126,20 @@ func (a *App) ensureBareRepo(ctx context.Context, name string) error {
 	return nil
 }
 
+// ensureWorkTree makes sure a plugin has a work tree wired to its bare repo.
+//
+// When the work tree is missing it is re-created AND seeded from the bare repo
+// whenever that repo already has history. Seeding is what keeps published
+// history durable: without it a re-created work tree starts from a fresh root
+// commit, and the push in materializePluginInner replaces refs/heads/main with
+// an unrelated history, orphaning every commit clients have already fetched or
+// pinned. The work tree is disposable state (a pod restart or a lost volume is
+// enough to remove it), so this path is routine rather than exceptional.
+//
+// If /data itself is ephemeral (helm: persistence disabled + rematerialize on
+// startup) the bare repo dies alongside the work tree and there is nothing to
+// seed from — history genuinely restarts there, and that mode should not be
+// presented as offering durable git history.
 func (a *App) ensureWorkTree(ctx context.Context, name string) error {
 	work := a.workPath(name)
 	bare := a.repoPath(name)
@@ -139,6 +153,25 @@ func (a *App) ensureWorkTree(ctx context.Context, name string) error {
 		return err
 	}
 	if _, err := runGit(ctx, work, "remote", "add", "origin", bare); err != nil {
+		return err
+	}
+
+	// ls-remote separates "no history yet" (exit 0, empty output) from a real
+	// git failure (non-zero exit), which rev-parse on a missing ref does not.
+	out, err := runGit(ctx, work, "ls-remote", "--heads", bare, "main")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) == "" {
+		// Brand new plugin: the root commit is legitimately the first one.
+		return nil
+	}
+	if _, err := runGit(ctx, work, "fetch", "origin", "main"); err != nil {
+		return err
+	}
+	// Resets the unborn main branch onto the published tip, so the next commit
+	// extends existing history instead of starting a parallel one.
+	if _, err := runGit(ctx, work, "reset", "--hard", "FETCH_HEAD"); err != nil {
 		return err
 	}
 	return nil
@@ -219,7 +252,12 @@ func (a *App) materializePluginInner(ctx context.Context, p *Plugin) error {
 	if _, err := runGit(ctx, work, "commit", "-m", "Update plugin contents"); err != nil {
 		return err
 	}
-	if _, err := runGit(ctx, work, "push", "origin", "HEAD:refs/heads/main", "--force"); err != nil {
+	// Deliberately not --force. With ensureWorkTree seeding from the bare repo
+	// every legitimate push fast-forwards, so a rejection here means the work
+	// tree and the bare repo have genuinely diverged (a bug, or two concurrent
+	// materializations of the same plugin). Failing loudly surfaces that;
+	// --force silently discarded published history instead.
+	if _, err := runGit(ctx, work, "push", "origin", "HEAD:refs/heads/main"); err != nil {
 		return err
 	}
 	return a.syncExternalPushPlugin(ctx, p)
