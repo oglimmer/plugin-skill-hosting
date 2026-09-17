@@ -417,6 +417,10 @@ func (a *App) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "SKILL.md name must be 3-64 chars, lowercase, [a-z0-9-]")
 		return
 	}
+	if err := validateSkillDescription(parsed.Description); err != nil {
+		writeErr(w, http.StatusBadRequest, "SKILL.md "+err.Error())
+		return
+	}
 
 	priorSkillCount, err := a.pluginSkillCount(r.Context(), p.ID)
 	if err != nil {

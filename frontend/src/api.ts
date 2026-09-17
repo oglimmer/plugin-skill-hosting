@@ -64,6 +64,23 @@ export function slugError(value: string): string {
   return 'name must be a lowercase slug — 3–64 characters, letters/digits/hyphens, starting and ending with a letter or digit'
 }
 
+// MAX_DESCRIPTION_CHARS mirrors the Claude Code SDK's limit on the SKILL.md
+// `description` frontmatter field. A skill over it is dropped from the
+// marketplace sync without failing its plugin — it just silently never reaches
+// users — so we stop it at the editor as well as in the API. String.length is
+// the right counter here: it counts UTF-16 code units, exactly as the SDK does.
+export const MAX_DESCRIPTION_CHARS = 1024
+
+// descriptionError returns a human-readable validation message for a skill
+// description, or '' when it is acceptable.
+export function descriptionError(value: string): string {
+  if (!value.trim()) return 'description is required'
+  if (value.length > MAX_DESCRIPTION_CHARS) {
+    return `description must be at most ${MAX_DESCRIPTION_CHARS} characters (currently ${value.length}) — the marketplace drops skills that exceed it`
+  }
+  return ''
+}
+
 export function errMsg(e: unknown, fallback = 'something went wrong'): string {
   if (e instanceof Error) return e.message || fallback
   if (typeof e === 'string') return e

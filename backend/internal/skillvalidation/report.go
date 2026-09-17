@@ -5,11 +5,19 @@ package skillvalidation
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 )
 
+// MaxDescriptionChars is the Claude Code SDK's hard limit on the SKILL.md
+// `description` frontmatter field, counted in UTF-16 code units. A skill over
+// it is dropped from the marketplace sync without failing the plugin, so both
+// the review rubric and the server-side write validation are driven from here
+// to keep the two numbers from drifting apart.
+const MaxDescriptionChars = 1024
+
 // SystemPrompt is the rubric we give Claude when asking it to review a skill.
-const SystemPrompt = `You are an expert reviewer of Claude Code agent skills. A skill is a directory containing SKILL.md (Markdown with YAML frontmatter: name, description, plus a body that tells Claude how to perform a task) and optionally supporting files under scripts/, references/, or assets/.
+var SystemPrompt = fmt.Sprintf(`You are an expert reviewer of Claude Code agent skills. A skill is a directory containing SKILL.md (Markdown with YAML frontmatter: name, description, plus a body that tells Claude how to perform a task) and optionally supporting files under scripts/, references/, or assets/.
 
 You will receive a draft. Your entire response must be a single JSON object and nothing else — no leading text, no trailing text, no Markdown, no code fences. The very first character of your output must be "{" and the very last character must be "}". Match exactly this schema:
 
@@ -24,6 +32,8 @@ You will receive a draft. Your entire response must be a single JSON object and 
   ],
   "suggestedDescription": "rewritten description sentence, or empty string if the current one is already good"
 }
+
+Hard limit: the description must be at most %d characters. This is enforced by the Claude Code SDK — a skill whose description is over it is silently dropped from the marketplace and never reaches users. Count the current description. If it is over, that is always a "problem" finding, and say by roughly how much it must be cut. Any "suggestedDescription" you return must itself be under the limit; never suggest a replacement that breaks it. When trimming, cut redundant trigger examples and restating first — keep one clear WHAT and a compact WHEN.
 
 Severity rules:
 - "problem": will cause Claude to misuse or fail to invoke the skill (e.g. vague description, missing trigger phrases, contradictory body, broken structure). Must be fixed.
@@ -42,7 +52,7 @@ Evaluation focus:
    - If no References section is provided, treat the absence as "unknown" rather than "unreferenced" and skip that warning entirely.
    - Do not make claims about what is inside a supporting file (arguments it accepts, behavior, correctness) — you have not seen contents. Stick to whether it is named, listed, and reachable.
 
-Be direct. No filler, no praise. If everything is fine, return an empty findings array.`
+Be direct. No filler, no praise. If everything is fine, return an empty findings array.`, MaxDescriptionChars)
 
 // Finding is a single categorized item in a validation report.
 type Finding struct {
@@ -61,7 +71,7 @@ type Report struct {
 // FixSystemPrompt is the rubric for the per-finding fix call. The model gets
 // the original draft plus one specific finding and must return a minimal patch
 // targeting just that finding.
-const FixSystemPrompt = `You are an expert reviewer of Claude Code agent skills. The user will show you a skill draft and ONE specific finding from a prior review. Your job is to produce a minimal patch that resolves that ONE finding without altering anything else.
+var FixSystemPrompt = fmt.Sprintf(`You are an expert reviewer of Claude Code agent skills. The user will show you a skill draft and ONE specific finding from a prior review. Your job is to produce a minimal patch that resolves that ONE finding without altering anything else.
 
 Your entire response must be a single JSON object and nothing else — no leading text, no trailing text, no Markdown, no code fences. The very first character of your output must be "{" and the very last character must be "}". Match exactly this schema:
 
@@ -79,7 +89,8 @@ Rules:
 - Address ONLY the finding you are given. Do not refactor unrelated parts of the skill.
 - Prefer the smallest edit that resolves the finding.
 - The skill name is a lowercase slug (letters, digits, hyphens). Only change it if the finding explicitly concerns the name.
-- Supporting files are listed by path only — you have not seen their contents. Do not invent or rewrite anything based on assumed file contents; refer to supporting files by path only.`
+- Supporting files are listed by path only — you have not seen their contents. Do not invent or rewrite anything based on assumed file contents; refer to supporting files by path only.
+- If you return a "description", it MUST be at most %d characters. The Claude Code SDK enforces this and silently drops any skill that exceeds it. When the finding is that the description is too long, cut redundant trigger examples first and keep one clear WHAT plus a compact WHEN.`, MaxDescriptionChars)
 
 // Fix is the JSON patch returned by the per-finding fix endpoint. Each field
 // is a pointer so we can distinguish "no change" (nil) from "set to empty

@@ -248,8 +248,8 @@ func (a *App) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "skill name must be 3-64 chars, lowercase, [a-z0-9-]")
 		return
 	}
-	if strings.TrimSpace(req.Description) == "" {
-		writeErr(w, http.StatusBadRequest, "description is required")
+	if err := validateSkillDescription(req.Description); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -333,6 +333,10 @@ func (a *App) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	var req skillReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if err := validateSkillDescription(req.Description); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -603,6 +607,12 @@ func (a *App) handleRestoreSkill(w http.ResponseWriter, r *http.Request) {
 		serverErr(w, r, err, "db error")
 		return
 	}
+	// The snapshot predates the description limit, so it may not satisfy it.
+	// Refuse rather than restore a skill the marketplace sync would drop.
+	if err := validateSkillDescription(desc); err != nil {
+		writeErr(w, http.StatusBadRequest, "cannot restore: "+err.Error())
+		return
+	}
 
 	tx, err := a.DB.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -764,6 +774,12 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		serverErr(w, r, err, "db error")
+		return
+	}
+	// The snapshot predates the description limit, so it may not satisfy it.
+	// Refuse rather than revert to a state the marketplace sync would drop.
+	if err := validateSkillDescription(targetDesc); err != nil {
+		writeErr(w, http.StatusBadRequest, "cannot revert: "+err.Error())
 		return
 	}
 

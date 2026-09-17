@@ -360,8 +360,8 @@ func (a *App) addToolCreateSkill(s *mcp.Server) {
 		if !slugRe.MatchString(name) {
 			return nil, zero, errors.New("name must be 3-64 chars, lowercase, [a-z0-9-]")
 		}
-		if strings.TrimSpace(in.Description) == "" {
-			return nil, zero, errors.New("description is required")
+		if err := validateSkillDescription(in.Description); err != nil {
+			return nil, zero, err
 		}
 
 		p, err := a.resolvePlugin(ctx, in.Plugin)
@@ -435,6 +435,9 @@ func (a *App) addToolUpdateSkill(s *mcp.Server) {
 		user := userFromCtx(ctx)
 		if user == nil {
 			return nil, zero, errors.New("unauthenticated")
+		}
+		if err := validateSkillDescription(in.Description); err != nil {
+			return nil, zero, err
 		}
 		p, err := a.resolvePlugin(ctx, in.Plugin)
 		if err != nil {

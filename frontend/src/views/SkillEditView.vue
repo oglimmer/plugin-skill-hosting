@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
-import { api, errMsg, slugError } from '../api'
+import { api, descriptionError, errMsg, slugError, MAX_DESCRIPTION_CHARS } from '../api'
 import type { ValidationReport, FindingSeverity, Finding } from '../types'
 import { useConfirm } from '../composables/useConfirm'
 import {
@@ -36,6 +36,17 @@ const router = useRouter()
 const isEdit = computed(() => !!props.skillName)
 const name = ref('')
 const description = ref('')
+// Live length feedback: the counter is always visible so a long description is
+// obvious before saving, not after the marketplace has silently dropped it.
+const descriptionLen = computed(() => description.value.length)
+const descriptionOver = computed(() => descriptionLen.value > MAX_DESCRIPTION_CHARS)
+// Over-length shows live, because save is disabled and a disabled button with
+// no reason is a dead end. "Required" only shows once they try to save, so an
+// untouched new skill isn't scolded for being blank.
+const submitDescriptionErr = ref('')
+const descriptionErr = computed(() =>
+  descriptionOver.value ? descriptionError(description.value) : submitDescriptionErr.value,
+)
 const body = ref(defaultBody())
 const extraFrontmatter = ref('')
 const error = ref('')
@@ -320,12 +331,18 @@ async function onImportFile(ev: Event) {
 async function submit() {
   error.value = ''
   nameError.value = ''
+  submitDescriptionErr.value = ''
   if (!isEdit.value) {
     const slugErr = slugError(name.value)
     if (slugErr) {
       nameError.value = slugErr
       return
     }
+  }
+  const descErr = descriptionError(description.value)
+  if (descErr) {
+    submitDescriptionErr.value = descErr
+    return
   }
   loading.value = true
   try {
@@ -628,7 +645,7 @@ watch(() => [props.pluginName, props.skillName], load)
         <button
           type="button"
           class="se-btn se-btn--primary"
-          :disabled="loading || importing || locked"
+          :disabled="loading || importing || locked || descriptionOver"
           @click="submit"
         >{{ loading ? 'saving…' : (isEdit ? 'save' : 'create') }}</button>
       </div>
@@ -726,7 +743,11 @@ watch(() => [props.pluginName, props.skillName], load)
           placeholder="One sentence — what does this skill do, and when should Claude reach for it?"
           @input="markTouched"
         />
-        <p class="se-field__hint">read by claude to decide when to invoke · keep it terse</p>
+        <p v-if="descriptionErr" class="se-field__error">{{ descriptionErr }}</p>
+        <p class="se-field__hint">
+          read by claude to decide when to invoke · keep it terse ·
+          <span :class="{ 'se-field__count--over': descriptionOver }">{{ descriptionLen }}/{{ MAX_DESCRIPTION_CHARS }}</span>
+        </p>
       </div>
 
       <details class="se-field se-field--collapse" :open="!!extraFrontmatter">
@@ -1404,6 +1425,10 @@ watch(() => [props.pluginName, props.skillName], load)
 }
 .se-field__input--invalid:focus {
   border-color: var(--rust);
+}
+.se-field__count--over {
+  color: var(--rust);
+  font-weight: 600;
 }
 .se-field__error {
   margin: 6px 0 0;

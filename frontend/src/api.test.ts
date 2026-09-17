@@ -9,6 +9,8 @@ import {
   errStatus,
   isJwtExpired,
   slugError,
+  descriptionError,
+  MAX_DESCRIPTION_CHARS,
 } from './api'
 
 describe('pure helpers', () => {
@@ -38,6 +40,26 @@ describe('pure helpers', () => {
       expect(slugError('ab')).not.toBe('')
       expect(slugError('-leading')).not.toBe('')
       expect(slugError('UPPER')).not.toBe('')
+    })
+  })
+
+  describe('descriptionError', () => {
+    it('accepts a normal description', () => {
+      expect(descriptionError('does a thing, use when asked')).toBe('')
+    })
+    it('rejects an empty or whitespace-only description', () => {
+      expect(descriptionError('')).not.toBe('')
+      expect(descriptionError('   \n\t ')).not.toBe('')
+    })
+    it('accepts a description exactly at the limit', () => {
+      expect(descriptionError('a'.repeat(MAX_DESCRIPTION_CHARS))).toBe('')
+    })
+    it('rejects a description one character over the limit', () => {
+      expect(descriptionError('a'.repeat(MAX_DESCRIPTION_CHARS + 1))).not.toBe('')
+    })
+    it('counts em dashes as one character, matching the SDK', () => {
+      // Byte-counting would reject this: an em dash is 3 bytes in UTF-8.
+      expect(descriptionError('\u2014'.repeat(MAX_DESCRIPTION_CHARS))).toBe('')
     })
   })
 
