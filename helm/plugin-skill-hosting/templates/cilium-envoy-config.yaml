@@ -1,0 +1,40 @@
+{{- /*
+  Cilium ingress timeout — implemented via annotation, not CiliumEnvoyConfig.
+
+  This file exists only as documentation.  No Kubernetes resource is rendered
+  here; timeout injection happens in templates/ingress.yaml where the chart
+  adds `ingress.cilium.io/request-timeout` automatically when:
+    ingress.className                    = "cilium"
+    ingress.cilium.requestTimeoutEnabled = true
+
+  Why not CiliumEnvoyConfig?
+  ──────────────────────────
+  CiliumEnvoyConfig (CEC) targets Cilium's transparent L7 proxy that sits on
+  the data path for east-west (pod-to-pod) traffic.  The Cilium Ingress
+  Controller uses a *separate* Envoy instance managed internally; a CEC
+  scoped to the backend services would intercept intra-cluster traffic only
+  and would not affect the ingress Envoy's behaviour.
+
+  For Cilium Ingress the official surface area is:
+    • ingress.cilium.io/request-timeout        — backend request timeout (s)
+    • ingress.cilium.io/loadbalancer-mode      — dedicated | shared
+    • ingress.cilium.io/tls-passthrough        — TLS passthrough
+    • ingress.cilium.io/force-https            — HTTP→HTTPS redirect
+    (full list: https://docs.cilium.io/en/stable/network/servicemesh/ingress/#annotations)
+
+  Body size
+  ─────────
+  The Cilium Ingress Envoy does NOT add an HTTP Buffer filter by default.
+  There is therefore no request body size limit — git push payloads of any
+  size are proxied without additional configuration.
+
+  Per-route timeout (e.g. /mcp with no timeout, other routes with 60 s)
+  ──────────────────────────────────────────────────────────────────────
+  The `request-timeout` annotation is global (all routes).  Per-route timeout
+  control requires the Cilium Gateway API:
+    apiVersion: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+  with a BackendLBPolicy or HTTPRouteFilter.  This is outside the scope of
+  this chart's standard Ingress support; switch ingress.className to "" and
+  manage HTTPRoute resources separately if you need it.
+*/}}
