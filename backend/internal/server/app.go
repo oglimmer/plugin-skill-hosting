@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,6 +40,14 @@ type App struct {
 	// ready gates the readiness probe. False while REMATERIALIZE_ON_STARTUP is
 	// running; true otherwise. Use MarkReady/IsReady to access it.
 	ready atomic.Bool
+
+	// materializeLocks serializes materialize/remove of each plugin's git
+	// work tree and bare repo. Keyed by plugin name; values are *sync.Mutex.
+	// Without this, concurrent materializePluginDetached calls for the same
+	// plugin can diverge work vs bare and (with non-force push) wedge forever.
+	// Use pluginMaterializeLock to access it — see that function for why
+	// entries are never removed.
+	materializeLocks sync.Map
 }
 
 func (a *App) MarkReady()    { a.ready.Store(true) }

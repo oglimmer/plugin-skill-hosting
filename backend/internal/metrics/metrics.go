@@ -81,7 +81,7 @@ var (
 	GitMaterializeDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "psh_git_materialize_duration_seconds",
-			Help:    "Time to regenerate a plugin's git working tree and force-push to its bare repo.",
+			Help:    "Time to regenerate a plugin's git working tree and fast-forward push to its bare repo.",
 			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30},
 		},
 	)

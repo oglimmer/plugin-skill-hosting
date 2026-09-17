@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sosedoff/gitkit"
@@ -126,15 +127,20 @@ func (a *App) ensureBareRepo(ctx context.Context, name string) error {
 	return nil
 }
 
-// ensureWorkTree makes sure a plugin has a work tree wired to its bare repo.
+// ensureWorkTree makes sure a plugin has a work tree wired to its bare repo
+// and seeded onto the published tip whenever that tip exists.
 //
-// When the work tree is missing it is re-created AND seeded from the bare repo
-// whenever that repo already has history. Seeding is what keeps published
-// history durable: without it a re-created work tree starts from a fresh root
-// commit, and the push in materializePluginInner replaces refs/heads/main with
-// an unrelated history, orphaning every commit clients have already fetched or
-// pinned. The work tree is disposable state (a pod restart or a lost volume is
-// enough to remove it), so this path is routine rather than exceptional.
+// Seeding is what keeps published history durable: without it a re-created
+// work tree starts from a fresh root commit, and a non-force push is rejected
+// (or, historically, a force-push would orphan every commit clients have
+// already fetched or pinned). The work tree is disposable state (a pod restart
+// or a lost volume is enough to remove it), so this path is routine rather
+// than exceptional.
+//
+// Seeding runs on every call — not only when the work tree is first created —
+// so a half-finished init (ls-remote/fetch/reset failed after git init) or a
+// work tree that drifted from bare recovers on the next materialize instead of
+// wedging on a permanent non-fast-forward push.
 //
 // If /data itself is ephemeral (helm: persistence disabled + rematerialize on
 // startup) the bare repo dies alongside the work tree and there is nothing to
@@ -143,19 +149,52 @@ func (a *App) ensureBareRepo(ctx context.Context, name string) error {
 func (a *App) ensureWorkTree(ctx context.Context, name string) error {
 	work := a.workPath(name)
 	bare := a.repoPath(name)
-	if _, err := os.Stat(filepath.Join(work, ".git")); err == nil {
-		return nil
+
+	if _, err := os.Stat(filepath.Join(work, ".git")); err != nil {
+		if err := a.initWorkTree(ctx, work, bare); err != nil {
+			return err
+		}
+	} else if err := a.ensureWorkTreeOrigin(ctx, work, bare); err != nil {
+		return err
 	}
+
+	return a.seedWorkTreeFromBare(ctx, work, bare)
+}
+
+// initWorkTree creates a fresh work tree with origin pointing at the bare repo.
+// On any failure after partial creation the directory is removed so the next
+// call can start clean instead of treating a broken tree as ready.
+func (a *App) initWorkTree(ctx context.Context, work, bare string) error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
 	if _, err := runGit(ctx, work, "init", "-b", "main"); err != nil {
+		_ = os.RemoveAll(work)
 		return err
+	}
+	if _, err := runGit(ctx, work, "remote", "add", "origin", bare); err != nil {
+		_ = os.RemoveAll(work)
+		return err
+	}
+	return nil
+}
+
+// ensureWorkTreeOrigin makes sure origin points at the bare path. Uses set-url
+// when the remote already exists (normal case) and falls back to add.
+func (a *App) ensureWorkTreeOrigin(ctx context.Context, work, bare string) error {
+	if _, err := runGit(ctx, work, "remote", "set-url", "origin", bare); err == nil {
+		return nil
 	}
 	if _, err := runGit(ctx, work, "remote", "add", "origin", bare); err != nil {
 		return err
 	}
+	return nil
+}
 
+// seedWorkTreeFromBare resets the work tree onto the bare repo's main tip when
+// that ref exists. No-ops on a brand-new bare repo with no history so the first
+// commit is still a legitimate root.
+func (a *App) seedWorkTreeFromBare(ctx context.Context, work, bare string) error {
 	// ls-remote separates "no history yet" (exit 0, empty output) from a real
 	// git failure (non-zero exit), which rev-parse on a missing ref does not.
 	out, err := runGit(ctx, work, "ls-remote", "--heads", bare, "main")
@@ -163,18 +202,31 @@ func (a *App) ensureWorkTree(ctx context.Context, name string) error {
 		return err
 	}
 	if strings.TrimSpace(out) == "" {
-		// Brand new plugin: the root commit is legitimately the first one.
 		return nil
 	}
 	if _, err := runGit(ctx, work, "fetch", "origin", "main"); err != nil {
 		return err
 	}
-	// Resets the unborn main branch onto the published tip, so the next commit
-	// extends existing history instead of starting a parallel one.
+	// DB is the source of truth for file content; materialize always wipe+renders
+	// after this, so a hard reset only repositions the branch tip. It recovers
+	// unborn main, incomplete seeds, and diverged local commits alike.
 	if _, err := runGit(ctx, work, "reset", "--hard", "FETCH_HEAD"); err != nil {
 		return err
 	}
 	return nil
+}
+
+// pluginMaterializeLock returns the per-plugin mutex used to serialize
+// materialize and remove of that plugin's git state.
+//
+// Entries are never deleted, including on plugin removal: dropping one while a
+// goroutine still holds it would hand the next caller a fresh mutex and lose
+// the serialization exactly when it matters. The map is bounded by the number
+// of distinct plugin names the process has seen, which is small enough that
+// leaking a mutex per name is the cheaper trade.
+func (a *App) pluginMaterializeLock(name string) *sync.Mutex {
+	v, _ := a.materializeLocks.LoadOrStore(name, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 func (a *App) removeRepo(name string) {
@@ -187,6 +239,10 @@ func (a *App) removeRepo(name string) {
 }
 
 func (a *App) removeInternalRepo(name string) error {
+	mu := a.pluginMaterializeLock(name)
+	mu.Lock()
+	defer mu.Unlock()
+
 	var errs []error
 	if err := os.RemoveAll(a.repoPath(name)); err != nil {
 		errs = append(errs, err)
@@ -224,18 +280,37 @@ func (a *App) materializePluginDetached(p *Plugin) error {
 }
 
 func (a *App) materializePluginInner(ctx context.Context, p *Plugin) error {
-	if err := a.ensureBareRepo(ctx, p.Name); err != nil {
+	if err := a.publishWorkTree(ctx, p.Name, func(work string) error {
+		return a.renderPluginInto(ctx, p, work)
+	}); err != nil {
 		return err
 	}
-	if err := a.ensureWorkTree(ctx, p.Name); err != nil {
+	return a.syncExternalPushPlugin(ctx, p)
+}
+
+// publishWorkTree runs the git half of a materialize under the plugin's lock:
+// it makes sure the bare repo and a seeded work tree exist, lets render rewrite
+// the emptied tree from the database, then commits and pushes.
+//
+// render receives the work tree path and is called with the per-plugin lock
+// held; it must be self-contained (no further git calls on the same plugin).
+func (a *App) publishWorkTree(ctx context.Context, name string, render func(work string) error) error {
+	mu := a.pluginMaterializeLock(name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if err := a.ensureBareRepo(ctx, name); err != nil {
 		return err
 	}
-	work := a.workPath(p.Name)
+	if err := a.ensureWorkTree(ctx, name); err != nil {
+		return err
+	}
+	work := a.workPath(name)
 
 	if err := wipeWorkTree(work); err != nil {
 		return err
 	}
-	if err := a.renderPluginInto(ctx, p, work); err != nil {
+	if err := render(work); err != nil {
 		return err
 	}
 
@@ -246,21 +321,37 @@ func (a *App) materializePluginInner(ctx context.Context, p *Plugin) error {
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(out) == "" {
-		return a.syncExternalPushPlugin(ctx, p)
+	switch {
+	case strings.TrimSpace(out) != "":
+		if _, err := runGit(ctx, work, "commit", "-m", "Update plugin contents"); err != nil {
+			return err
+		}
+	case !workTreeHasCommit(ctx, work):
+		// Nothing rendered and no history at all — there is nothing to publish.
+		return nil
 	}
-	if _, err := runGit(ctx, work, "commit", "-m", "Update plugin contents"); err != nil {
-		return err
-	}
-	// Deliberately not --force. With ensureWorkTree seeding from the bare repo
-	// every legitimate push fast-forwards, so a rejection here means the work
-	// tree and the bare repo have genuinely diverged (a bug, or two concurrent
-	// materializations of the same plugin). Failing loudly surfaces that;
+	// Pushed even when the content was unchanged: bare main can be missing or
+	// behind while the work tree still holds the content (a lost or partially
+	// removed bare repo), and that state is otherwise unrecoverable — every
+	// later materialize would short-circuit on the same clean status.
+	//
+	// Deliberately not --force. ensureWorkTree reseeds from bare every call and
+	// materialize is serialized per plugin, so HEAD is bare's tip or a
+	// descendant of it and legitimate pushes fast-forward. A rejection here
+	// means something outside this process rewrote the bare tip (or a bug left
+	// the work tree diverged mid-flight). Failing loudly surfaces that;
 	// --force silently discarded published history instead.
 	if _, err := runGit(ctx, work, "push", "origin", "HEAD:refs/heads/main"); err != nil {
 		return err
 	}
-	return a.syncExternalPushPlugin(ctx, p)
+	return nil
+}
+
+// workTreeHasCommit reports whether the work tree has any commit on HEAD, i.e.
+// whether there is a tip a push could publish.
+func workTreeHasCommit(ctx context.Context, work string) bool {
+	_, err := runGit(ctx, work, "rev-parse", "--verify", "HEAD")
+	return err == nil
 }
 
 // renderPluginInto writes the full plugin file tree (manifest, skills,

@@ -24,7 +24,7 @@ When a Claude Code user adds a marketplace, two things happen:
    - `skills/<skill-name>/{scripts,references,assets}/…` — optional supporting files for multi-file skills
    - `README.md`
 
-The backend keeps Postgres as the source of truth. Whenever you create, edit, or delete a plugin/skill via the API (or via MCP), it **materialises** the plugin into a working tree, commits, and force-pushes to a bare repo on disk under `/data/repos/<plugin>.git`. That bare repo is served via git smart HTTP using [`gitkit`](https://github.com/sosedoff/gitkit), which wraps `git http-backend`.
+The backend keeps Postgres as the source of truth. Whenever you create, edit, or delete a plugin/skill via the API (or via MCP), it **materialises** the plugin into a working tree (seeded from the existing bare history when present), commits, and fast-forward pushes to a bare repo on disk under `/data/repos/<plugin>.git`. That bare repo is served via git smart HTTP using [`gitkit`](https://github.com/sosedoff/gitkit), which wraps `git http-backend`.
 
 Independently, **`/mcp`** exposes a Model Context Protocol server (Streamable HTTP transport) bound to the same per-user token. Tools cover read-only access to plugins and full create/update access to skills and their supporting files — every write goes through the same materialise-and-commit pipeline, so MCP edits show up in the git repo and the marketplace immediately. See [§MCP server](#mcp-server) below.
 
