@@ -156,6 +156,16 @@ Tools exposed:
 | `create_skill` | write | Add a new skill to a plugin |
 | `update_skill` | write | Replace a skill's description and body |
 | `upsert_skill_file` | write | Create or overwrite a supporting file under `scripts/`, `references/`, or `assets/` |
+| `get_marketplace_url` | read | The caller's personal marketplace URL and the `claude plugin marketplace add` command for it |
+
+The server also exposes one prompt, `setup_marketplace`, which asks the client to call `get_marketplace_url` and run the command.
+
+### Quick setup via MCP
+
+Once the MCP server is connected (directly, or through an MCP portal that signs users in with OAuth), a user can skip the home page entirely: ask Claude Code to "set up the skills marketplace". Claude calls `get_marketplace_url` and runs the returned `claude plugin marketplace add '<url>'`. The marketplace URL and how it authenticates are unchanged — it is the same per-user URL the home page shows.
+
+> [!NOTE]
+> The URL carries the user's API token, so it ends up in the conversation transcript, and anyone holding an MCP session can obtain the long-lived API token through this tool. MCP sign-in is the same SSO that already shows the token on the home page, so this gives a legitimate user nothing new.
 
 Plugins themselves are read-only over MCP (no `create_plugin` / `delete_plugin`), and **nothing can be deleted via MCP** — destructive operations stay behind the web UI. Every write tool runs the same code path as the corresponding REST handler: it bumps the plugin version, snapshots a new skill version row, and re-materialises the bare git repo, so changes are visible to `git clone` and `marketplace.json` immediately.
 
