@@ -234,6 +234,8 @@ func (a *App) registerMCPTools(s *mcp.Server) {
 	a.addToolListSkillFiles(s)
 	a.addToolGetSkillFile(s)
 	a.addToolUpsertSkillFile(s)
+	a.addToolGetMarketplaceURL(s)
+	a.addPromptSetupMarketplace(s)
 }
 
 func (a *App) addToolListPlugins(s *mcp.Server) {
