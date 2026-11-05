@@ -15,9 +15,20 @@
   "prHourlyLimit": 10,
   "prConcurrentLimit": 20,
   "rebaseWhen": "behind-base-branch",
-  "rangeStrategy": "bump",
   "automergeType": "branch",
   "packageRules": [
+    {
+      "description": "rangeStrategy \"bump\" for npm dependency ranges only — Docker tags, engines and CI node-version keep their own precision",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies"
+      ],
+      "rangeStrategy": "bump"
+    },
     {
       "description": "Group each manager's non-major updates into one PR per manager",
       "matchUpdateTypes": [
@@ -69,10 +80,7 @@
       "pinDigests": false
     },
     {
-      "description": "No release-age delay on Docker digest pins — a pin records which image a tag resolves to, not a new version (version bumps keep their soak)",
-      "matchDatasources": [
-        "docker"
-      ],
+      "description": "No release-age delay on digest pins (Docker images, GitHub Actions) — a pin records which artifact a tag resolves to, not a new version (version bumps keep their soak)",
       "matchUpdateTypes": [
         "pin",
         "pinDigest",
