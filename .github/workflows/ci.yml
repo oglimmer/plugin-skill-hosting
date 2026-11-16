@@ -157,7 +157,9 @@ jobs:
     name: E2E
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.60 can't
+    # install browser deps for. Unpin once Playwright supports 26.04.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: e2e
