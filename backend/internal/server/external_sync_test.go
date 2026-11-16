@@ -60,6 +60,35 @@ func TestCredentialedURL_DefaultsToXAccessToken(t *testing.T) {
 	}
 }
 
+func TestCredentialedURL_GitLabDefaultsToOAuth2(t *testing.T) {
+	cases := []struct{ remote, override string }{
+		{"https://gitlab.com/acme/marketplace.git", ""},
+		{"https://gitlab.example.com/acme/sub/marketplace.git", ""},
+		{"https://git.example.com/acme/marketplace.git", "gitlab"},
+	}
+	for _, c := range cases {
+		es := &externalSync{cfg: config.Config{
+			ExternalGitRemoteURL: c.remote,
+			ExternalGitProvider:  c.override,
+			ExternalGitToken:     "secret",
+		}}
+		if got := es.credentialedURL(); !strings.HasPrefix(got, "https://oauth2:secret@") {
+			t.Errorf("%s (override %q): expected oauth2 default username; got %q", c.remote, c.override, got)
+		}
+	}
+}
+
+func TestCredentialedURL_ExplicitUsernameWinsForGitLab(t *testing.T) {
+	es := &externalSync{cfg: config.Config{
+		ExternalGitRemoteURL: "https://gitlab.com/acme/marketplace.git",
+		ExternalGitUsername:  "project_123_bot",
+		ExternalGitToken:     "secret",
+	}}
+	if got := es.credentialedURL(); !strings.HasPrefix(got, "https://project_123_bot:secret@") {
+		t.Errorf("explicit username should win; got %q", got)
+	}
+}
+
 func TestCredentialedURL_NoTokenLeavesURLUnchanged(t *testing.T) {
 	remote := "https://github.com/acme/marketplace.git"
 	es := &externalSync{cfg: config.Config{ExternalGitRemoteURL: remote}}

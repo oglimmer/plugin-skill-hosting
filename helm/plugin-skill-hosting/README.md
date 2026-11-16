@@ -144,7 +144,11 @@ When `externalGit.remoteURL` is non-empty the backend one-way mirrors the market
 externalGit:
   remoteURL: "https://github.com/your-org/marketplace-mirror.git"
   branch: main
-  # username defaults to x-access-token (GitHub PAT) — use "oauth2" for GitLab.
+  # username: leave empty — defaults to x-access-token (GitHub) or oauth2 (GitLab).
+  # For GitLab.com: remoteURL "https://gitlab.com/group/project.git" and a
+  # service-account token (write_repository) whose account has the Maintainer
+  # role. See the top-level README "GitLab.com" section. Self-hosted GitLab on
+  # a host without "gitlab" in its name also needs: provider: gitlab
 ```
 
 **5. Apply** (git commit + ArgoCD sync, or `helm upgrade`).

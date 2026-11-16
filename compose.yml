@@ -58,7 +58,8 @@ services:
       # marketplace is one-way mirrored to that single repo on every change.
       EXTERNAL_GIT_REMOTE_URL: ${EXTERNAL_GIT_REMOTE_URL:-}
       EXTERNAL_GIT_BRANCH: ${EXTERNAL_GIT_BRANCH:-main}
-      EXTERNAL_GIT_USERNAME: ${EXTERNAL_GIT_USERNAME:-x-access-token}
+      EXTERNAL_GIT_USERNAME: ${EXTERNAL_GIT_USERNAME:-}
+      EXTERNAL_GIT_PROVIDER: ${EXTERNAL_GIT_PROVIDER:-}
       EXTERNAL_GIT_TOKEN: ${EXTERNAL_GIT_TOKEN:-}
     volumes:
       - repo_data:/data

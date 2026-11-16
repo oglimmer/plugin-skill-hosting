@@ -394,6 +394,17 @@ func (es *externalSync) pushCurrentBranch(ctx context.Context) error {
 	return err
 }
 
+// defaultTokenUsername picks the HTTP Basic Auth username that goes with a
+// token when EXTERNAL_GIT_USERNAME is unset: "oauth2" for GitLab (works for
+// personal, project and group access tokens), "x-access-token" otherwise
+// (GitHub PAT / app-token convention).
+func defaultTokenUsername(host, providerOverride string) string {
+	if resolveProvider(host, providerOverride) == "gitlab" {
+		return "oauth2"
+	}
+	return "x-access-token"
+}
+
 // credentialedURL embeds the configured token as HTTP Basic Auth password in
 // the remote URL. For non-HTTP remotes (git@host:..., ssh://) the URL is
 // returned unchanged — auth is expected via ssh keys / agent.
@@ -408,7 +419,7 @@ func (es *externalSync) credentialedURL() string {
 	}
 	username := es.cfg.ExternalGitUsername
 	if username == "" {
-		username = "x-access-token"
+		username = defaultTokenUsername(u.Hostname(), es.cfg.ExternalGitProvider)
 	}
 	u.User = url.UserPassword(username, es.cfg.ExternalGitToken)
 	return u.String()

@@ -162,8 +162,14 @@ spec:
           value: {{ .Values.externalGit.remoteURL | quote }}
         - name: EXTERNAL_GIT_BRANCH
           value: {{ .Values.externalGit.branch | default "main" | quote }}
+        {{- with .Values.externalGit.username }}
         - name: EXTERNAL_GIT_USERNAME
-          value: {{ .Values.externalGit.username | default "x-access-token" | quote }}
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.externalGit.provider }}
+        - name: EXTERNAL_GIT_PROVIDER
+          value: {{ . | quote }}
+        {{- end }}
         - name: EXTERNAL_GIT_TOKEN
           valueFrom:
             secretKeyRef:

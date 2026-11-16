@@ -92,6 +92,10 @@ type Config struct {
 	ExternalGitBranch    string
 	ExternalGitUsername  string
 	ExternalGitToken     string
+	// ExternalGitProvider forces "github" or "gitlab" for hosts that can't
+	// be recognised by name (e.g. self-hosted GitLab at git.example.com).
+	// Empty means detect from the remote host.
+	ExternalGitProvider string
 
 	// MCPOAuthClientID / MCPOAuthClientSecret enable OAuth 2.1 Authorization
 	// Code + PKCE on the /mcp endpoint. Both must be set or both empty.
@@ -169,8 +173,9 @@ func Load() Config {
 
 		ExternalGitRemoteURL: strings.TrimSpace(getenv("EXTERNAL_GIT_REMOTE_URL", "")),
 		ExternalGitBranch:    strings.TrimSpace(getenv("EXTERNAL_GIT_BRANCH", "main")),
-		ExternalGitUsername:  getenv("EXTERNAL_GIT_USERNAME", "x-access-token"),
+		ExternalGitUsername:  strings.TrimSpace(getenv("EXTERNAL_GIT_USERNAME", "")),
 		ExternalGitToken:     getenv("EXTERNAL_GIT_TOKEN", ""),
+		ExternalGitProvider:  strings.ToLower(strings.TrimSpace(getenv("EXTERNAL_GIT_PROVIDER", ""))),
 
 		MCPOAuthClientID:     getenv("MCP_OAUTH_CLIENT_ID", ""),
 		MCPOAuthClientSecret: getenv("MCP_OAUTH_CLIENT_SECRET", ""),

@@ -151,7 +151,12 @@ backend:
 externalGit:
   remoteURL: "https://github.com/oglimmer/skill-sync.git"
   branch: main
-  username: x-access-token
+  # Empty = auto: "oauth2" for GitLab remotes, "x-access-token" otherwise.
+  username: ""
+  # github | gitlab. Empty = detect from the host. Only needed for a
+  # self-hosted GitLab whose host name has no "gitlab" label
+  # (e.g. git.example.com).
+  provider: ""
 
 # OAuth 2.1 authorization server for the /mcp endpoint. Disabled until
 # clientID is non-empty. When enabled, the sealed secret must additionally

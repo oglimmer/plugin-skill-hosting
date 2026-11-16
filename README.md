@@ -184,7 +184,8 @@ Set on the backend container:
 | `EXTERNAL_GIT_REMOTE_URL` | yes (enables sync) | — |
 | `EXTERNAL_GIT_TOKEN` | yes for HTTPS remotes | — |
 | `EXTERNAL_GIT_BRANCH` | no | `main` |
-| `EXTERNAL_GIT_USERNAME` | no | `x-access-token` (GitHub PAT convention; use `oauth2` for GitLab) |
+| `EXTERNAL_GIT_USERNAME` | no | `oauth2` for GitLab remotes, `x-access-token` otherwise |
+| `EXTERNAL_GIT_PROVIDER` | no | detected from host (`github` / `gitlab`) |
 
 Mechanics:
 
@@ -202,7 +203,49 @@ EXTERNAL_GIT_TOKEN=ghp_xxx \
 docker compose up
 ```
 
-For GitLab, set `EXTERNAL_GIT_USERNAME=oauth2` and use a project or group access token.
+#### GitLab.com
+
+GitLab works the same way. Steps for a GitLab.com mirror:
+
+1. Create an empty project, e.g. `your-group/marketplace-mirror`. Subgroups work too (`your-group/sub/marketplace-mirror`).
+2. Create the identity that pushes. Use a **service account** (Group → Settings → Service accounts). It works on every tier, including Free, and its token can be set to never expire.
+   - On Premium / Ultimate a project or group access token also works. Note that those tokens always expire (365 days max).
+   - Personal access tokens also work, but they always expire and are tied to a person.
+   - Deploy tokens do **not** work: they cannot push.
+3. Add the service account to the project with the **Maintainer** role. GitLab protects the default branch by default, and only Maintainers can push to a protected branch. With the Developer role every push is rejected. (Alternative: keep Developer and add the account to "Allowed to push and merge" under Settings → Repository → Protected branches.)
+4. Create a token for the service account with the `write_repository` scope. To make it non-expiring, a group Owner must first clear "Require expiration dates for service accounts" in the group settings, then leave the expiry date empty.
+5. Point the backend at the project:
+
+   ```bash
+   EXTERNAL_GIT_REMOTE_URL=https://gitlab.com/your-group/marketplace-mirror.git \
+   EXTERNAL_GIT_TOKEN=glpat-xxx \
+   docker compose up
+   ```
+
+Notes:
+
+- The token username defaults to `oauth2` for GitLab remotes. GitLab.com accepts any non-empty username with a token, so an explicit `EXTERNAL_GIT_USERNAME` also works.
+- Self-hosted GitLab is detected when a host label is `gitlab` (e.g. `gitlab.example.com`). For any other host name set `EXTERNAL_GIT_PROVIDER=gitlab`.
+- **Token expiry breaks the sync quietly.** Push failures only log a `WARN`, and if the token is invalid at startup, sync is disabled for that process. If your token expires, put a renewal in the calendar and check the Git mirror admin page after each rotation.
+
+#### Installing from the GitLab mirror
+
+The generated `.claude-plugin/marketplace.json` points at the mirror repo, so users can run:
+
+```
+/plugin marketplace add https://gitlab.com/your-group/marketplace-mirror.git
+```
+
+Use the full URL; the `owner/repo` shorthand always means github.com.
+
+For a **private** project, Claude Code runs git without prompts, so every user needs a stored git credential for gitlab.com before they add the marketplace. A token in an environment variable alone is not enough. Any git credential helper works (Git Credential Manager, the GitLab CLI, or on macOS the `osxkeychain` helper). Example with the macOS keychain, using a personal access token with `read_repository` as the password:
+
+```bash
+git config --global credential.helper osxkeychain
+git ls-remote https://gitlab.com/your-group/marketplace-mirror.git   # enter username + token once; the helper stores them
+```
+
+Without a stored credential, `/plugin marketplace add` fails, and background auto-update fails without a visible message.
 
 ### One-shot bootstrap
 
