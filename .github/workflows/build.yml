@@ -2,7 +2,7 @@ name: Build & push images
 
 # Builds the frontend and/or backend Docker images and pushes them to
 # ghcr.io/oglimmer via the repo's oglimmer.sh script, on the in-cluster
-# self-hosted ARC runner (arm64, Docker-in-Docker). Only the components whose
+# self-hosted ARC runner (arm64, Docker-in-Docker), multi-arch (amd64+arm64). Only the components whose
 # files changed are built (mirrors ci.yml). The runner has no kubectl, so
 # oglimmer.sh triggers the rollout via the restart hook (restart.oglimmer.com)
 # using the RESTART_TOKEN secret passed in the environment.
@@ -50,6 +50,12 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
       - name: Log in to ghcr.io
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
@@ -57,14 +63,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --platform auto -> plain `docker build` + `docker push` via the dind
-      # daemon (native arm64). Avoids the buildx docker-container driver, whose
-      # push session times out against the registry's public ingress.
+      # --platform multi -> buildx builds amd64 (QEMU) + arm64 and pushes one
+      # multi-arch :latest. The k3s cluster runs arm64, stage (stage-ansible)
+      # runs amd64 and pulls :latest too.
       # No kubectl on the runner, so the rollout goes through the restart hook.
       - name: Build, push & restart backend
         env:
           RESTART_TOKEN: ${{ secrets.RESTART_TOKEN }}
-        run: ./oglimmer.sh build -b --platform auto --verbose
+        run: ./oglimmer.sh build -b --platform multi --verbose
 
   frontend:
     needs: changes
@@ -73,6 +79,12 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
       - name: Log in to ghcr.io
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
@@ -80,8 +92,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # No kubectl on the runner, so the rollout goes through the restart hook.
+      # Same as backend: multi-arch via buildx. No kubectl, restart via hook.
       - name: Build, push & restart frontend
         env:
           RESTART_TOKEN: ${{ secrets.RESTART_TOKEN }}
-        run: ./oglimmer.sh build -f --platform auto --verbose
+        run: ./oglimmer.sh build -f --platform multi --verbose
