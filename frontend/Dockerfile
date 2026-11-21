@@ -1,4 +1,5 @@
-FROM node:24.16.0-alpine AS build
+# dist/ is platform independent: build it once, natively (no QEMU).
+FROM --platform=$BUILDPLATFORM node:24.16.0-alpine AS build
 WORKDIR /src
 COPY package.json package-lock.json* ./
 RUN npm install --no-audit --no-fund

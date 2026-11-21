@@ -1,4 +1,8 @@
-FROM golang:1.26-alpine AS build
+# Build stage runs on the native build platform and cross-compiles (no QEMU:
+# the Go toolchain crashes under amd64 emulation on the arm64 runner).
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum* ./
@@ -7,7 +11,7 @@ COPY . .
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
-RUN go mod tidy && CGO_ENABLED=0 go build \
+RUN go mod tidy && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags "-s -w \
               -X marketplace/internal/buildinfo.Version=${VERSION} \
               -X marketplace/internal/buildinfo.Commit=${GIT_COMMIT} \
