@@ -17,15 +17,17 @@ const { exampleToken, hostNoScheme } = useApiExamples()
     <pre>git clone https://_:{{ exampleToken }}@{{ hostNoScheme }}/git/my-plugin.git</pre>
 
     <h3>Repository layout</h3>
-    <p>On every skill change the server rewrites the working tree to:</p>
+    <p>On every skill or agent change the server rewrites the working tree to:</p>
 <pre>my-plugin/
 ├── plugin.json                # name, version, author, license, ...
-└── skills/
-    └── &lt;skill-name&gt;/
-        ├── SKILL.md            # YAML frontmatter (name, description) + body
-        ├── scripts/...         # if any supporting files
-        ├── references/...
-        └── assets/...</pre>
+├── skills/
+│   └── &lt;skill-name&gt;/
+│       ├── SKILL.md            # YAML frontmatter (name, description) + body
+│       ├── scripts/...         # if any supporting files
+│       ├── references/...
+│       └── assets/...
+└── agents/                    # only when the plugin has agents
+    └── &lt;agent-name&gt;.md        # YAML frontmatter (name, description, model, tools) + system prompt</pre>
 
     <aside class="warn">
       <h4>Read-only over Git</h4>

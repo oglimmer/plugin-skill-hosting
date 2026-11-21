@@ -92,6 +92,21 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/plugins/:name/agents/new',
+      component: () => import('./views/AgentEditView.vue'),
+      props: route => ({ pluginName: route.params.name, agentName: null }),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/plugins/:name/agents/:agentName/edit',
+      component: () => import('./views/AgentEditView.vue'),
+      props: route => ({
+        pluginName: route.params.name,
+        agentName: route.params.agentName,
+      }),
+      meta: { requiresAuth: true },
+    },
+    {
       // Programmatic error target — guards and views can redirect here with a
       // status, e.g. router.push({ path: '/error', query: { code: 403 } }).
       path: '/error',

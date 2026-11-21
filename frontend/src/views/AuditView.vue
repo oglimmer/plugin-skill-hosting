@@ -3,9 +3,12 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { api, errMsg } from '../api'
 import ErrorAlert from '../components/ErrorAlert.vue'
-import type { AuditResult } from '../types'
+import type { AuditPendingItem, AuditResult } from '../types'
 
 const results = ref<AuditResult[]>([])
+// Audit gate: changes saved but not published yet (checking or held).
+const gate = ref(false)
+const pending = ref<AuditPendingItem[]>([])
 const enabled = ref(true)
 const threshold = ref(70)
 const running = ref(false)
@@ -23,6 +26,28 @@ function fmt(d?: string | null) {
   return new Date(d).toLocaleString()
 }
 
+// The audit covers skills and agents. These three helpers hide the difference
+// from the template: a stable key, the display label, and the edit link.
+function itemKey(r: AuditResult): string {
+  return r.kind === 'agent' ? `agent:${r.agentId}` : `skill:${r.skillId}`
+}
+function itemLabel(r: AuditResult): string {
+  return r.kind === 'agent'
+    ? `${r.pluginName} / agent ${r.agentName}`
+    : `${r.pluginName} / ${r.skillName}`
+}
+function itemLink(r: AuditResult): string {
+  return r.kind === 'agent'
+    ? `/plugins/${r.pluginName}/agents/${r.agentName}/edit`
+    : `/plugins/${r.pluginName}/skills/${r.skillName}/edit`
+}
+
+function pendingLink(it: AuditPendingItem): string {
+  return it.kind === 'agent'
+    ? `/plugins/${it.pluginName}/agents/${it.name}/edit`
+    : `/plugins/${it.pluginName}/skills/${it.name}/edit`
+}
+
 function toggle(id: string) {
   const next = new Set(expanded.value)
   if (next.has(id)) next.delete(id)
@@ -36,6 +61,8 @@ async function load() {
   try {
     const resp = await api.listAuditResults()
     results.value = resp.results
+    gate.value = !!resp.gate
+    pending.value = resp.pending ?? []
     enabled.value = resp.enabled
     threshold.value = resp.threshold
     running.value = resp.running
@@ -71,6 +98,19 @@ onMounted(load)
     email to the configured recipients.
   </p>
 
+  <p class="muted intro">
+    <template v-if="gate">
+      <strong>Publish gate: on.</strong> A new or changed skill or agent is
+      published only after its security check passes. Until then the last
+      published version stays live.
+    </template>
+    <template v-else>
+      <strong>Publish gate: off.</strong> Changes are published at once and
+      checked afterwards, if at all. Set <code>AUDIT_ON_CHANGE=true</code> (and
+      <code>ANTHROPIC_API_KEY</code>) to check every change before it is published.
+    </template>
+  </p>
+
   <div v-if="!enabled" class="card warn">
     The scheduled audit is currently <strong>disabled</strong>. Set
     <code>AUDIT_ENABLED=true</code> (and <code>ANTHROPIC_API_KEY</code>) to enable it.
@@ -92,20 +132,54 @@ onMounted(load)
       <p class="muted" style="margin: 0">No audit results yet. Run an audit to populate this page.</p>
     </div>
 
+    <section v-if="pending.length > 0" class="section">
+      <h2 class="section-title">
+        Waiting to publish
+        <span class="chip">{{ pending.length }}</span>
+      </h2>
+      <p class="muted" style="margin: 0 0 10px">
+        These changes are saved but not published: each one goes live only after
+        its security check passes. A change whose check failed is held — the check
+        is retried automatically, and you can publish it by hand on its plugin page.
+      </p>
+      <table class="card" style="padding: 0">
+        <thead>
+          <tr>
+            <th style="padding-left: 20px">Skill / agent</th>
+            <th>State</th>
+            <th>Since</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="it in pending" :key="`${it.kind}:${it.pluginName}/${it.name}`">
+            <td style="padding-left: 20px">
+              <RouterLink class="skill-link" :to="pendingLink(it)">
+                {{ it.pluginName }} / {{ it.kind === 'agent' ? 'agent ' : '' }}{{ it.name }}
+              </RouterLink>
+            </td>
+            <td :class="{ muted: !it.error }">
+              {{ it.error ? `held — check failed: ${it.error}` : 'checking' }}
+            </td>
+            <td class="muted" style="white-space: nowrap"><small>{{ fmt(it.since) }}</small></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
     <section v-if="flagged.length > 0" class="section">
       <h2 class="section-title">
         Flagged
         <span class="chip chip--flag">{{ flagged.length }}</span>
       </h2>
-      <div v-for="r in flagged" :key="r.skillId" class="card result" @click="toggle(r.skillId)">
+      <div v-for="r in flagged" :key="itemKey(r)" class="card result" @click="toggle(itemKey(r))">
         <div class="result-head">
           <span class="badge" :class="`badge--${r.riskLevel}`">{{ r.riskScore }}</span>
           <div class="result-title">
             <RouterLink
               class="skill-link"
-              :to="`/plugins/${r.pluginName}/skills/${r.skillName}/edit`"
+              :to="itemLink(r)"
               @click.stop
-            >{{ r.pluginName }} / {{ r.skillName }}</RouterLink>
+            >{{ itemLabel(r) }}</RouterLink>
             <span class="muted summary">{{ r.summary }}</span>
           </div>
           <small class="muted when">{{ fmt(r.auditedAt) }}</small>
@@ -113,7 +187,7 @@ onMounted(load)
         <div v-if="r.categories.length" class="cats">
           <span v-for="c in r.categories" :key="c" class="tag">{{ c }}</span>
         </div>
-        <ul v-if="expanded.has(r.skillId) && r.findings.length" class="findings">
+        <ul v-if="expanded.has(itemKey(r)) && r.findings.length" class="findings">
           <li v-for="(f, i) in r.findings" :key="i">
             <span class="sev" :class="`sev--${f.severity}`">{{ f.severity }}</span>
             <strong>{{ f.category }}</strong> — {{ f.detail }}
@@ -130,19 +204,19 @@ onMounted(load)
       <table class="card" style="padding: 0">
         <thead>
           <tr>
-            <th style="padding-left: 20px">Skill</th>
+            <th style="padding-left: 20px">Skill / agent</th>
             <th>Risk</th>
             <th>Summary</th>
             <th>Audited</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in clean" :key="r.skillId">
+          <tr v-for="r in clean" :key="itemKey(r)">
             <td style="padding-left: 20px">
               <RouterLink
                 class="skill-link"
-                :to="`/plugins/${r.pluginName}/skills/${r.skillName}/edit`"
-              >{{ r.pluginName }} / {{ r.skillName }}</RouterLink>
+                :to="itemLink(r)"
+              >{{ itemLabel(r) }}</RouterLink>
             </td>
             <td><span class="badge" :class="`badge--${r.riskLevel}`">{{ r.riskScore }}</span></td>
             <td class="muted">{{ r.summary || '—' }}</td>
@@ -158,11 +232,11 @@ onMounted(load)
           Could not be audited ({{ errored.length }})
         </summary>
         <ul class="errlist">
-          <li v-for="r in errored" :key="r.skillId">
+          <li v-for="r in errored" :key="itemKey(r)">
             <RouterLink
               class="skill-link"
-              :to="`/plugins/${r.pluginName}/skills/${r.skillName}/edit`"
-            >{{ r.pluginName }} / {{ r.skillName }}</RouterLink>
+              :to="itemLink(r)"
+            >{{ itemLabel(r) }}</RouterLink>
             <span class="muted"> — {{ r.error }}</span>
           </li>
         </ul>

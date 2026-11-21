@@ -72,6 +72,7 @@ type mcpPluginDetail struct {
 	License     string            `json:"license"`
 	Homepage    string            `json:"homepage"`
 	Skills      []mcpSkillSummary `json:"skills"`
+	Agents      []mcpAgentSummary `json:"agents"`
 }
 
 type mcpSkillFileBrief struct {
@@ -234,6 +235,9 @@ func (a *App) registerMCPTools(s *mcp.Server) {
 	a.addToolListSkillFiles(s)
 	a.addToolGetSkillFile(s)
 	a.addToolUpsertSkillFile(s)
+	a.addToolGetAgent(s)
+	a.addToolCreateAgent(s)
+	a.addToolUpdateAgent(s)
 	a.addToolGetMarketplaceURL(s)
 	a.addPromptSetupMarketplace(s)
 }
@@ -271,7 +275,7 @@ func (a *App) addToolGetPlugin(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_plugin",
 		Title:       "Get plugin",
-		Description: "Read a plugin's metadata and the list of its skills (names + descriptions, no bodies).",
+		Description: "Read a plugin's metadata and the lists of its skills and agents (names + descriptions, no bodies).",
 	}, instrumentMCP("get_plugin", func(ctx context.Context, _ *mcp.CallToolRequest, in mcpPluginRefIn) (*mcp.CallToolResult, mcpPluginDetail, error) {
 		var zero mcpPluginDetail
 		if userFromCtx(ctx) == nil {
@@ -293,6 +297,7 @@ func (a *App) addToolGetPlugin(s *mcp.Server) {
 			License:     p.License,
 			Homepage:    p.Homepage,
 			Skills:      make([]mcpSkillSummary, 0, len(skills)),
+			Agents:      []mcpAgentSummary{},
 		}
 		for _, sk := range skills {
 			// Locked skills are hidden from MCP listings too, consistent with
@@ -306,7 +311,23 @@ func (a *App) addToolGetPlugin(s *mcp.Server) {
 				UpdatedAt:   sk.UpdatedAt,
 			})
 		}
-		return okResult(fmt.Sprintf("plugin %q v%s, %d skill(s)", p.Name, p.Version, len(out.Skills)), out)
+		agents, err := a.loadAgentsForPlugin(ctx, p.ID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("db error: %w", err)
+		}
+		for _, ag := range agents {
+			// Locked agents are hidden from MCP listings, like locked skills.
+			if ag.Locked {
+				continue
+			}
+			out.Agents = append(out.Agents, mcpAgentSummary{
+				Name:        ag.Name,
+				Description: ag.Description,
+				Model:       ag.Model,
+				UpdatedAt:   ag.UpdatedAt,
+			})
+		}
+		return okResult(fmt.Sprintf("plugin %q v%s, %d skill(s), %d agent(s)", p.Name, p.Version, len(out.Skills), len(out.Agents)), out)
 	}))
 }
 
@@ -421,7 +442,7 @@ func (a *App) addToolCreateSkill(s *mcp.Server) {
 		metrics.SkillMutationsTotal.WithLabelValues("create", "success").Inc()
 		a.auditSkillOnChange(id)
 		return okResult(
-			fmt.Sprintf("created skill %q in %q (plugin now v%s)", name, p.Name, p.Version),
+			fmt.Sprintf("created skill %q in %q (plugin now v%s)%s", name, p.Name, p.Version, a.publishNote()),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "skill created"},
 		)
 	}))
@@ -484,7 +505,7 @@ func (a *App) addToolUpdateSkill(s *mcp.Server) {
 		metrics.SkillMutationsTotal.WithLabelValues("update", "success").Inc()
 		a.auditSkillOnChange(existing.ID)
 		return okResult(
-			fmt.Sprintf("updated skill %q in %q (plugin now v%s)", existing.Name, p.Name, p.Version),
+			fmt.Sprintf("updated skill %q in %q (plugin now v%s)%s", existing.Name, p.Name, p.Version, a.publishNote()),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "skill updated"},
 		)
 	}))
@@ -662,7 +683,7 @@ func (a *App) addToolUpsertSkillFile(s *mcp.Server) {
 		metrics.SkillFileMutationsTotal.WithLabelValues("upsert", "success").Inc()
 		a.auditSkillOnChange(sk.ID)
 		return okResult(
-			fmt.Sprintf("wrote %s to %s/%s (plugin now v%s)", pth, p.Name, sk.Name, p.Version),
+			fmt.Sprintf("wrote %s to %s/%s (plugin now v%s)%s", pth, p.Name, sk.Name, p.Version, a.publishNote()),
 			mcpStatusOut{OK: true, Version: p.Version, Message: "file written"},
 		)
 	}))

@@ -4,13 +4,16 @@ const { origin, exampleToken } = useApiExamples()
 
 const tools = [
   { name: 'list_plugins', desc: 'List all active plugins (name, description, version, owner, updatedAt).', mode: 'read' },
-  { name: 'get_plugin', desc: "Read a plugin's metadata and the list of its skills (names + descriptions, no bodies).", mode: 'read' },
+  { name: 'get_plugin', desc: "Read a plugin's metadata and the lists of its skills and agents (names + descriptions, no bodies).", mode: 'read' },
   { name: 'get_skill', desc: "Read a skill's description, SKILL.md body, and the list of its supporting files.", mode: 'read' },
   { name: 'create_skill', desc: 'Add a new skill to a plugin. Bumps the plugin version and rewrites the git repo.', mode: 'write' },
   { name: 'update_skill', desc: "Replace a skill's description and body. Bumps the plugin version.", mode: 'write' },
   { name: 'list_skill_files', desc: 'List supporting files attached to a skill (paths + sizes, no content).', mode: 'read' },
   { name: 'get_skill_file', desc: 'Read one supporting file. Binary files are returned as base64 (isBinary=true).', mode: 'read' },
   { name: 'upsert_skill_file', desc: 'Write a supporting file under scripts/, references/, or assets/. Bumps the plugin patch version.', mode: 'write' },
+  { name: 'get_agent', desc: "Read a plugin agent (subagent): description, system prompt, model, tools and further frontmatter.", mode: 'read' },
+  { name: 'create_agent', desc: 'Add a new agent to a plugin, published as agents/<name>.md. Claude Code exposes it as <plugin>:<name>. Bumps the plugin version.', mode: 'write' },
+  { name: 'update_agent', desc: "Replace an agent's description and system prompt, and optionally its model, tools and further frontmatter. Bumps the plugin version.", mode: 'write' },
 ]
 </script>
 
@@ -67,6 +70,13 @@ const tools = [
       and <code>get_plugin</code> skill lists, and <code>get_skill</code> /
       <code>get_skill_file</code> return "not found" for it — only the web UI shows it
       (flagged locked, read-only).
+    </p>
+
+    <p class="muted">
+      <strong>Writes may not be live at once.</strong> When the
+      <a href="#audit">publish gate</a> is on, a write tool saves the change and
+      its result says "not published yet": the change goes live after the security
+      check passes. Read tools return the saved content either way.
     </p>
 
     <h3>Tools</h3>

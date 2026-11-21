@@ -132,32 +132,85 @@ func TestPluginManifest_EmbedsSchemaAndRepository(t *testing.T) {
 	}
 }
 
-func TestWipeWorkTree_PreservesGitDir(t *testing.T) {
-	dir := t.TempDir()
+func TestMoveWorkTreeAside_PreservesGitDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "work")
+	prev := dir + ".prev"
 	mustMkdir(t, filepath.Join(dir, ".git"))
 	mustWrite(t, filepath.Join(dir, ".git", "HEAD"), "ref: refs/heads/main\n")
 	mustWrite(t, filepath.Join(dir, "README.md"), "hi")
 	mustMkdir(t, filepath.Join(dir, "skills"))
 	mustWrite(t, filepath.Join(dir, "skills", "a.txt"), "x")
+	// A stale prev dir from an earlier, interrupted run must not leak in.
+	mustMkdir(t, prev)
+	mustWrite(t, filepath.Join(prev, "stale.txt"), "old")
 
-	if err := wipeWorkTree(dir); err != nil {
-		t.Fatalf("wipeWorkTree: %v", err)
+	if err := moveWorkTreeAside(dir, prev); err != nil {
+		t.Fatalf("moveWorkTreeAside: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, ".git", "HEAD")); err != nil {
 		t.Errorf(".git contents removed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "README.md")); !os.IsNotExist(err) {
-		t.Errorf("README.md should be gone, err = %v", err)
+		t.Errorf("README.md should be gone from the work tree, err = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "skills")); !os.IsNotExist(err) {
-		t.Errorf("skills/ should be gone, err = %v", err)
+		t.Errorf("skills/ should be gone from the work tree, err = %v", err)
+	}
+	// The previous tree is kept aside, complete and without .git.
+	if b, err := os.ReadFile(filepath.Join(prev, "skills", "a.txt")); err != nil || string(b) != "x" {
+		t.Errorf("prev/skills/a.txt = %q, %v; want the moved file", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(prev, ".git")); !os.IsNotExist(err) {
+		t.Errorf(".git must not be moved aside, err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(prev, "stale.txt")); !os.IsNotExist(err) {
+		t.Errorf("stale prev content should have been cleared, err = %v", err)
 	}
 }
 
-func TestWipeWorkTree_MissingDir(t *testing.T) {
-	if err := wipeWorkTree(filepath.Join(t.TempDir(), "does-not-exist")); err == nil {
+func TestMoveWorkTreeAside_MissingDir(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	if err := moveWorkTreeAside(missing, missing+".prev"); err == nil {
 		t.Error("expected error for missing directory")
+	}
+}
+
+func TestCopyPublished(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	mustMkdir(t, filepath.Join(src, "scripts"))
+	mustWrite(t, filepath.Join(src, "SKILL.md"), "skill")
+	mustWrite(t, filepath.Join(src, "scripts", "run.sh"), "echo hi")
+
+	// A directory tree is copied whole.
+	dst := filepath.Join(root, "dst", "nested")
+	ok, err := copyPublished(src, dst)
+	if err != nil || !ok {
+		t.Fatalf("copyPublished(dir) = %v, %v", ok, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dst, "scripts", "run.sh")); string(b) != "echo hi" {
+		t.Errorf("nested file not copied: %q", b)
+	}
+
+	// A single file is copied, creating its parent directory.
+	fileDst := filepath.Join(root, "out", "agents", "a.md")
+	ok, err = copyPublished(filepath.Join(src, "SKILL.md"), fileDst)
+	if err != nil || !ok {
+		t.Fatalf("copyPublished(file) = %v, %v", ok, err)
+	}
+	if b, _ := os.ReadFile(fileDst); string(b) != "skill" {
+		t.Errorf("file not copied: %q", b)
+	}
+
+	// A missing source is "nothing was published", not an error, and creates nothing.
+	gone := filepath.Join(root, "never", "x")
+	ok, err = copyPublished(filepath.Join(root, "missing"), gone)
+	if err != nil || ok {
+		t.Errorf("copyPublished(missing) = %v, %v; want false, nil", ok, err)
+	}
+	if _, err := os.Stat(filepath.Dir(gone)); !os.IsNotExist(err) {
+		t.Errorf("a missing source must not create the destination, err = %v", err)
 	}
 }
 
@@ -259,7 +312,7 @@ func publishOnce(t *testing.T, a *App, name, content string) {
 
 // publishOnceErr is publishOnce without t.Fatal so concurrent tests can collect errors.
 func publishOnceErr(a *App, name, content string) error {
-	return a.publishWorkTree(context.Background(), name, func(work string) error {
+	return a.publishWorkTree(context.Background(), name, func(work, _ string) error {
 		return os.WriteFile(filepath.Join(work, "README.md"), []byte(content), 0o644)
 	})
 }
@@ -398,8 +451,8 @@ func TestEnsureWorkTree_ResyncsDivergedWorkTree(t *testing.T) {
 
 	// Simulate a local orphan history that is not based on bare main.
 	work := a.workPath(name)
-	if err := wipeWorkTree(work); err != nil {
-		t.Fatalf("wipe: %v", err)
+	if err := os.Remove(filepath.Join(work, "README.md")); err != nil {
+		t.Fatalf("clear work tree: %v", err)
 	}
 	mustWrite(t, filepath.Join(work, "README.md"), "orphan")
 	if _, err := runGit(ctx, work, "checkout", "--orphan", "orphan-branch"); err != nil {

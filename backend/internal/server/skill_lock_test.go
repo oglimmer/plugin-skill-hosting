@@ -42,7 +42,7 @@ func renderedSkillExists(t *testing.T, app *App, plugin, skill string) bool {
 		t.Fatalf("load plugin %s: %v", plugin, err)
 	}
 	dir := t.TempDir()
-	if err := app.renderPluginInto(ctx, p, dir); err != nil {
+	if err := app.renderPluginInto(ctx, p, dir, ""); err != nil {
 		t.Fatalf("render plugin %s: %v", plugin, err)
 	}
 	_, err = os.Stat(filepath.Join(dir, "skills", skill, "SKILL.md"))

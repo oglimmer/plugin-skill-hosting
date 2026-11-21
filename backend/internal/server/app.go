@@ -48,7 +48,25 @@ type App struct {
 	// Use pluginMaterializeLock to access it — see that function for why
 	// entries are never removed.
 	materializeLocks sync.Map
+
+	// Audit gate bookkeeping (see audit_gate.go). auditAttempts maps an item
+	// key to the time of its last check attempt, so the retry loop can space
+	// attempts out. auditHoldAlerted holds the pending tokens admins were
+	// already alerted about, so a held change alerts once, not on every retry.
+	// Both are in-memory only: after a restart the worst case is one extra
+	// attempt and one repeated alert.
+	auditAttempts    sync.Map
+	auditHoldAlerted sync.Map
+
+	// onChangeAudits tracks the detached on-change audit goroutines, so
+	// shutdown (and tests) can wait for an in-flight check and its git
+	// rebuild instead of cutting it off halfway.
+	onChangeAudits sync.WaitGroup
 }
+
+// WaitOnChangeAudits blocks until every on-change audit that has started has
+// finished, including the re-publish it may trigger.
+func (a *App) WaitOnChangeAudits() { a.onChangeAudits.Wait() }
 
 func (a *App) MarkReady()    { a.ready.Store(true) }
 func (a *App) IsReady() bool { return a.ready.Load() }
@@ -115,6 +133,7 @@ type Plugin struct {
 	DeletedBy     *string    `json:"deletedBy,omitempty"`
 	DeletedByName *string    `json:"deletedByName,omitempty"`
 	Skills        []Skill    `json:"skills,omitempty"`
+	Agents        []Agent    `json:"agents,omitempty"`
 }
 
 type Skill struct {
@@ -143,6 +162,13 @@ type Skill struct {
 	LockedByName *string    `json:"lockedByName,omitempty"`
 	LockSource   *string    `json:"lockSource,omitempty"`
 	LockReason   string     `json:"lockReason,omitempty"`
+	// Audit gate state (see audit_gate.go). AuditPending means the current
+	// content has not passed the security audit yet, so it is not published:
+	// git still serves the last published copy. A non-empty AuditPendingError
+	// means the last check attempt failed and the change is held.
+	AuditPending      bool       `json:"auditPending"`
+	AuditPendingAt    *time.Time `json:"auditPendingAt,omitempty"`
+	AuditPendingError string     `json:"auditPendingError,omitempty"`
 }
 
 type SkillVersion struct {

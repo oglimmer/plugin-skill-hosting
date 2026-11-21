@@ -116,7 +116,13 @@ func main() {
 	// Wait for background workers to drain, bounded by the same deadline so a
 	// wedged worker can't block exit indefinitely.
 	done := make(chan struct{})
-	go func() { bg.Wait(); close(done) }()
+	go func() {
+		bg.Wait()
+		// An on-change audit that is cut off here leaves its item pending; the
+		// audit gate's retry loop picks it up after the next start.
+		app.WaitOnChangeAudits()
+		close(done)
+	}()
 	select {
 	case <-done:
 	case <-shutdownCtx.Done():

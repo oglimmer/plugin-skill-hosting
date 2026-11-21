@@ -491,6 +491,7 @@ func (a *App) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	metrics.SkillMutationsTotal.WithLabelValues("create", "success").Inc()
+	a.auditSkillOnChange(id)
 	if s, err := a.loadSkillByID(r.Context(), id); err == nil {
 		writeJSON(w, http.StatusOK, s)
 		return

@@ -105,6 +105,36 @@ import ParamRow from '../ParamRow.vue'
     </Endpoint>
 
     <aside class="callout">
+      <h4>Publish gate</h4>
+      <p>
+        When the <a href="#audit">publish gate</a> is on
+        (<code>AUDIT_ON_CHANGE=true</code>), the writes above — create, import,
+        update, file writes, restore and revert — save the change but do not
+        publish it until its security check passes. The skill object then carries
+        <code>auditPending: true</code>, and <code>auditPendingError</code> when the
+        check failed and the change is held. The last published version stays in
+        git until the check passes.
+      </p>
+    </aside>
+
+    <Endpoint
+      method="POST"
+      path="/api/plugins/{name}/skills/{skill}/audit-approve"
+      summary="Publish a skill's pending or held change without a passed security check. Admin-only."
+    >
+      <template #response>
+        <p><code>200 OK</code> with the updated skill object (<code>auditPending: false</code>).</p>
+      </template>
+      <template #errors>
+        <ul class="dev-list">
+          <li><code>403</code> — caller is not an admin</li>
+          <li><code>404</code> — plugin or skill not found</li>
+          <li><code>409</code> — the skill has no pending change</li>
+        </ul>
+      </template>
+    </Endpoint>
+
+    <aside class="callout">
       <h4>Locking</h4>
       <p>
         A locked skill is withdrawn from the git repo, the external mirror, and the

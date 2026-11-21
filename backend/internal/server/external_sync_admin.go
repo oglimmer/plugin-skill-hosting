@@ -95,8 +95,8 @@ func (a *App) handleAdminSyncStatus(w http.ResponseWriter, r *http.Request) {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	render := func(name, dir string) error {
-		return a.renderPluginInto(r.Context(), byName[name], dir)
+	render := func(name, dir, prevDir string) error {
+		return a.renderPluginInto(r.Context(), byName[name], dir, prevDir)
 	}
 	missing, outOfDate, extra, err := a.ExternalSync.checkPlugins(r.Context(), names, render)
 	if err != nil {
@@ -140,8 +140,8 @@ func (a *App) handleAdminSyncReconcile(w http.ResponseWriter, r *http.Request) {
 		serverErr(w, r, err, "db error")
 		return
 	}
-	render := func(name, dir string) error {
-		return a.renderPluginInto(r.Context(), byName[name], dir)
+	render := func(name, dir, prevDir string) error {
+		return a.renderPluginInto(r.Context(), byName[name], dir, prevDir)
 	}
 	missing, outOfDate, extra, err := a.ExternalSync.checkPlugins(r.Context(), names, render)
 	if err != nil {
@@ -159,8 +159,8 @@ func (a *App) handleAdminSyncReconcile(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(needPush)
 	for _, name := range needPush {
 		p := byName[name]
-		if err := a.ExternalSync.pushPlugin(r.Context(), name, func(dir string) error {
-			return a.renderPluginInto(r.Context(), p, dir)
+		if err := a.ExternalSync.pushPlugin(r.Context(), name, func(dir, prevDir string) error {
+			return a.renderPluginInto(r.Context(), p, dir, prevDir)
 		}); err != nil {
 			report.Errors[name] = err.Error()
 			continue

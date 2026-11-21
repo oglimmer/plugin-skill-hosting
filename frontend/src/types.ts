@@ -41,6 +41,54 @@ export interface Plugin {
   deletedBy?: string
   deletedByName?: string
   skills?: Skill[]
+  agents?: Agent[]
+}
+
+// Agent is a plugin-level subagent definition. It is published as
+// agents/<name>.md at the plugin root, and Claude Code exposes it as the agent
+// type "<plugin>:<name>". `body` is the subagent's system prompt.
+export interface Agent {
+  id: string
+  pluginId: string
+  name: string
+  description: string
+  body: string
+  // `model` frontmatter: an alias (opus, sonnet, haiku, inherit) or a model id.
+  // '' means not set.
+  model: string
+  // `tools` frontmatter: a comma-separated allowlist. '' means inherit all.
+  tools: string
+  // Any further frontmatter keys, as raw YAML.
+  extraFrontmatter: string
+  createdAt: string
+  updatedAt: string
+  createdBy?: string
+  createdByName?: string
+  updatedBy?: string
+  updatedByName?: string
+  // Lock state, same meaning as on Skill: a locked agent is withdrawn from git,
+  // the external mirror and MCP, but stays visible here flagged as locked.
+  locked: boolean
+  lockedAt?: string
+  lockedBy?: string
+  lockedByName?: string
+  lockSource?: 'admin' | 'audit'
+  lockReason?: string
+  // Audit gate state, same meaning as on Skill.
+  auditPending?: boolean
+  auditPendingAt?: string
+  auditPendingError?: string
+}
+
+// AgentInput is the create/update payload. On update, a field left out keeps
+// its stored value; '' clears it.
+export interface AgentInput {
+  name?: string
+  description: string
+  body: string
+  model?: string
+  tools?: string
+  extraFrontmatter?: string
 }
 
 export interface Skill {
@@ -68,6 +116,14 @@ export interface Skill {
   lockedByName?: string
   lockSource?: 'admin' | 'audit'
   lockReason?: string
+  // Audit gate. `auditPending` means the current content has not passed the
+  // security check yet, so it is saved but not published: git still serves the
+  // last published version. A non-empty `auditPendingError` means the check
+  // itself failed and the change is held until a retry passes or an admin
+  // approves it.
+  auditPending?: boolean
+  auditPendingAt?: string
+  auditPendingError?: string
 }
 
 export interface SkillVersion {
@@ -150,11 +206,16 @@ export interface AuditFinding {
   detail: string
 }
 
-// AuditResult is the latest stored security-audit verdict for one skill.
+// AuditResult is the latest stored security-audit verdict for one skill or one
+// agent. `kind` says which: a skill result carries skillId/skillName, an agent
+// result carries agentId/agentName.
 export interface AuditResult {
-  skillId: string
+  kind: 'skill' | 'agent'
+  skillId?: string
   pluginName: string
-  skillName: string
+  skillName?: string
+  agentId?: string
+  agentName?: string
   auditedAt: string
   model: string
   riskScore: number
@@ -165,11 +226,24 @@ export interface AuditResult {
   error?: string
 }
 
+// AuditPendingItem is one change that is saved but not published yet because
+// the audit gate has not released it. `error` is set when its check failed.
+export interface AuditPendingItem {
+  kind: 'skill' | 'agent'
+  pluginName: string
+  name: string
+  since: string
+  error?: string
+}
+
 export interface AuditResultsResponse {
   enabled: boolean
   threshold: number
   running: boolean
   results: AuditResult[]
+  // gate: changes are published only after they pass the security check.
+  gate?: boolean
+  pending?: AuditPendingItem[]
 }
 
 export interface ExternalSyncStatus {

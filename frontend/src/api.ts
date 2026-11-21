@@ -1,4 +1,6 @@
 import type {
+  Agent,
+  AgentInput,
   AuthConfig,
   BackendBuildInfo,
   Plugin,
@@ -232,6 +234,42 @@ export const api = {
   revertSkill: (pluginName: string, skillName: string, version: number) =>
     request<Skill>(`/api/plugins/${pluginName}/skills/${skillName}/revert/${version}`, {
       method: 'POST',
+    }),
+  createAgent: (pluginName: string, data: AgentInput) =>
+    request<Agent>(`/api/plugins/${pluginName}/agents`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateAgent: (pluginName: string, agentName: string, data: AgentInput) =>
+    request<Agent>(`/api/plugins/${pluginName}/agents/${agentName}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  // Permanent: agents have no restore. The server allows it for the plugin
+  // owner, an admin, or the agent's creator.
+  deleteAgent: (pluginName: string, agentName: string) =>
+    request<void>(`/api/plugins/${pluginName}/agents/${agentName}`, {
+      method: 'DELETE',
+    }),
+  // Admin-only override for the audit gate: publish a pending or held change
+  // without a passed security check.
+  approveSkillAudit: (pluginName: string, skillName: string) =>
+    request<Skill>(`/api/plugins/${pluginName}/skills/${skillName}/audit-approve`, {
+      method: 'POST',
+    }),
+  approveAgentAudit: (pluginName: string, agentName: string) =>
+    request<Agent>(`/api/plugins/${pluginName}/agents/${agentName}/audit-approve`, {
+      method: 'POST',
+    }),
+  // Admin-only, same contract as lockSkill / unlockSkill.
+  lockAgent: (pluginName: string, agentName: string, reason: string) =>
+    request<Agent>(`/api/plugins/${pluginName}/agents/${agentName}/lock`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  unlockAgent: (pluginName: string, agentName: string) =>
+    request<Agent>(`/api/plugins/${pluginName}/agents/${agentName}/lock`, {
+      method: 'DELETE',
     }),
   validateSkill: (data: {
     pluginName?: string

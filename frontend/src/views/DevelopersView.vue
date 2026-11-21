@@ -8,6 +8,7 @@ import RestAccountSection from '../components/dev/sections/RestAccountSection.vu
 import RestPluginsSection from '../components/dev/sections/RestPluginsSection.vue'
 import RestSkillsSection from '../components/dev/sections/RestSkillsSection.vue'
 import RestFilesSection from '../components/dev/sections/RestFilesSection.vue'
+import RestAgentsSection from '../components/dev/sections/RestAgentsSection.vue'
 import RestValidatorSection from '../components/dev/sections/RestValidatorSection.vue'
 import MarketplaceSection from '../components/dev/sections/MarketplaceSection.vue'
 import GitSection from '../components/dev/sections/GitSection.vue'
@@ -23,7 +24,7 @@ const isAdmin = computed(() => !!auth.user?.isAdmin)
 type SectionId =
   | 'overview' | 'auth' | 'rest'
   | 'marketplace' | 'git' | 'mcp' | 'cli' | 'audit' | 'errors'
-type RestTabId = 'auth' | 'account' | 'plugins' | 'skills' | 'files' | 'validator'
+type RestTabId = 'auth' | 'account' | 'plugins' | 'skills' | 'files' | 'agents' | 'validator'
 
 // The Security audit section documents an admin-only feature, so it is only
 // listed (and reachable) for admins. Everything else is public reference.
@@ -46,6 +47,7 @@ const restTabs: { id: RestTabId; title: string }[] = [
   { id: 'plugins',   title: 'Plugins' },
   { id: 'skills',    title: 'Skills' },
   { id: 'files',     title: 'Skill files' },
+  { id: 'agents',    title: 'Agents' },
   { id: 'validator', title: 'Validator' },
 ]
 
@@ -103,6 +105,7 @@ const restTabComponent = computed(() => {
     case 'plugins':   return RestPluginsSection
     case 'skills':    return RestSkillsSection
     case 'files':     return RestFilesSection
+    case 'agents':    return RestAgentsSection
     case 'validator': return RestValidatorSection
   }
   return RestAuthSection

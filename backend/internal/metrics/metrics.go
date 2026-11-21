@@ -78,6 +78,14 @@ var (
 		[]string{"action", "result"},
 	)
 
+	AgentMutationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "psh_agent_mutations_total",
+			Help: "Agent mutation count by action (create|update|delete) and result.",
+		},
+		[]string{"action", "result"},
+	)
+
 	GitMaterializeDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "psh_git_materialize_duration_seconds",
@@ -205,6 +213,7 @@ func init() {
 		PluginMutationsTotal,
 		SkillMutationsTotal,
 		SkillFileMutationsTotal,
+		AgentMutationsTotal,
 		GitMaterializeDuration,
 		GitMaterializeTotal,
 		ClaudeValidationDuration,

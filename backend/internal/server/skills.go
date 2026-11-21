@@ -33,7 +33,8 @@ func (a *App) loadSkillsForPlugin(ctx context.Context, pluginID string) ([]Skill
 		       s.created_by, cu.username,
 		       s.updated_by, uu.username,
 		       s.deleted_at, s.deleted_by, du.username,
-		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason
+		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason,
+		       s.audit_pending_token IS NOT NULL, s.audit_pending_at, s.audit_pending_error
 		FROM skills s
 		LEFT JOIN users cu ON cu.id = s.created_by
 		LEFT JOIN users uu ON uu.id = s.updated_by
@@ -52,7 +53,8 @@ func (a *App) loadDeletedSkillsForPlugin(ctx context.Context, pluginID string) (
 		       s.created_by, cu.username,
 		       s.updated_by, uu.username,
 		       s.deleted_at, s.deleted_by, du.username,
-		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason
+		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason,
+		       s.audit_pending_token IS NOT NULL, s.audit_pending_at, s.audit_pending_error
 		FROM skills s
 		LEFT JOIN users cu ON cu.id = s.created_by
 		LEFT JOIN users uu ON uu.id = s.updated_by
@@ -77,13 +79,19 @@ func (a *App) querySkills(ctx context.Context, query string, args ...interface{}
 		var deletedAt sql.NullTime
 		var lockedAt sql.NullTime
 		var lockedBy, lockedByName, lockSource sql.NullString
+		var auditPendingAt sql.NullTime
 		if err := rows.Scan(&s.ID, &s.PluginID, &s.Name, &s.Description, &s.Body, &s.ExtraFrontmatter,
 			&s.CreatedAt, &s.UpdatedAt,
 			&createdBy, &createdByName,
 			&updatedBy, &updatedByName,
 			&deletedAt, &deletedBy, &deletedByName,
-			&lockedAt, &lockedBy, &lockedByName, &lockSource, &s.LockReason); err != nil {
+			&lockedAt, &lockedBy, &lockedByName, &lockSource, &s.LockReason,
+			&s.AuditPending, &auditPendingAt, &s.AuditPendingError); err != nil {
 			return nil, err
+		}
+		if auditPendingAt.Valid {
+			t := auditPendingAt.Time
+			s.AuditPendingAt = &t
 		}
 		if createdBy.Valid {
 			v := createdBy.String
@@ -143,7 +151,8 @@ func (a *App) loadActiveSkill(ctx context.Context, pluginID, name string) (*Skil
 		       s.created_by, cu.username,
 		       s.updated_by, uu.username,
 		       s.deleted_at, s.deleted_by, du.username,
-		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason
+		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason,
+		       s.audit_pending_token IS NOT NULL, s.audit_pending_at, s.audit_pending_error
 		FROM skills s
 		LEFT JOIN users cu ON cu.id = s.created_by
 		LEFT JOIN users uu ON uu.id = s.updated_by
@@ -168,7 +177,8 @@ func (a *App) loadSkillByID(ctx context.Context, id string) (*Skill, error) {
 		       s.created_by, cu.username,
 		       s.updated_by, uu.username,
 		       s.deleted_at, s.deleted_by, du.username,
-		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason
+		       s.locked_at, s.locked_by, lu.username, s.lock_source, s.lock_reason,
+		       s.audit_pending_token IS NOT NULL, s.audit_pending_at, s.audit_pending_error
 		FROM skills s
 		LEFT JOIN users cu ON cu.id = s.created_by
 		LEFT JOIN users uu ON uu.id = s.updated_by
@@ -203,7 +213,18 @@ func (a *App) recordSkillVersion(ctx context.Context, tx db.Exec, skillID, actio
 	`, skillID, nextVersion, action, name, description, body, extraFrontmatter, editedBy).Scan(&versionID); err != nil {
 		return err
 	}
-	return snapshotSkillFiles(ctx, tx, versionID, skillID)
+	if err := snapshotSkillFiles(ctx, tx, versionID, skillID); err != nil {
+		return err
+	}
+	// Audit gate: every action that puts new or changed content in front of
+	// users marks the skill pending in the same transaction as the content
+	// write, so no materialize can ever see unchecked content as publishable.
+	// delete and move do not change what the skill says, so they don't.
+	switch action {
+	case "create", "update", "restore", "revert":
+		return a.markAuditPending(ctx, tx, auditKindSkill, skillID)
+	}
+	return nil
 }
 
 // loadActiveSkillOrRespond fetches the skill named by the URL :skill param
@@ -653,6 +674,7 @@ func (a *App) handleRestoreSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	metrics.SkillMutationsTotal.WithLabelValues("restore", "success").Inc()
+	a.auditSkillOnChange(skillID)
 	if s, err := a.loadSkillByID(r.Context(), skillID); err == nil {
 		writeJSON(w, http.StatusOK, s)
 		return
@@ -837,6 +859,7 @@ func (a *App) handleRevertSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	metrics.SkillMutationsTotal.WithLabelValues("revert", "success").Inc()
+	a.auditSkillOnChange(skillID)
 	if s, err := a.loadSkillByID(r.Context(), skillID); err == nil {
 		writeJSON(w, http.StatusOK, s)
 		return

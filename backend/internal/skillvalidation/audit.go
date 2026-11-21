@@ -14,7 +14,22 @@ import (
 // because malicious payloads typically hide in scripts rather than SKILL.md.
 const SecurityAuditSystemPrompt = `You are a security auditor reviewing a Claude Code agent skill for malicious or harmful behavior. A skill is a directory with SKILL.md (Markdown + YAML frontmatter) and optional supporting files (scripts, references, assets) whose contents are provided to you.
 
-Assess ONLY safety/maliciousness — NOT authoring quality, style, or whether the description is well written. Look for, among other things:
+` + auditRubric
+
+// AgentSecurityAuditSystemPrompt is the same audit for a plugin agent
+// (subagent) instead of a skill. An agent is one markdown file whose body is
+// the subagent's system prompt, so the threat is the same — harmful
+// instructions — plus one agent-specific signal: frontmatter that grants more
+// than the stated purpose needs.
+const AgentSecurityAuditSystemPrompt = `You are a security auditor reviewing a Claude Code subagent definition for malicious or harmful behavior. A subagent is a single Markdown file shipped in a plugin: YAML frontmatter (name, description, and optionally model, tools and further keys) plus a body that becomes the subagent's system prompt. Its full content is provided to you. It has no supporting files.
+
+In the rules below, read every mention of "the skill" as "the subagent". In addition to those rules, treat frontmatter that grants more than the stated purpose needs (for example a broad tool allowlist or permission-related keys on an agent described as read-only) as a signal worth a finding.
+
+` + auditRubric
+
+// auditRubric is the part of the audit prompt shared by skills and agents:
+// what to look for, the response schema and the scoring rules.
+const auditRubric = `Assess ONLY safety/maliciousness — NOT authoring quality, style, or whether the description is well written. Look for, among other things:
 - Data exfiltration: sending file contents, secrets, credentials, environment variables, or conversation data to external/unexpected destinations.
 - Destructive actions: deleting/overwriting files, wiping disks, dropping databases, or other irreversible damage without clear user intent.
 - Malicious code: backdoors, reverse shells, crypto miners, obfuscated or encoded payloads, downloading and executing remote code.

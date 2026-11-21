@@ -66,6 +66,12 @@ var migration0017 string
 //go:embed migrations/0018_skill_lock.sql
 var migration0018 string
 
+//go:embed migrations/0019_agents.sql
+var migration0019 string
+
+//go:embed migrations/0020_audit_gate.sql
+var migration0020 string
+
 // Open opens the application's *sql.DB through pgx's database/sql adapter and
 // configures it for use behind a transaction-pool PgBouncer (the deployment in
 // front of OVH Managed PG, and the common HA layout in general).
@@ -166,6 +172,12 @@ func Migrate(db *sql.DB) error {
 	}
 	if _, err := db.Exec(migration0018); err != nil {
 		return fmt.Errorf("0018_skill_lock: %w", err)
+	}
+	if _, err := db.Exec(migration0019); err != nil {
+		return fmt.Errorf("0019_agents: %w", err)
+	}
+	if _, err := db.Exec(migration0020); err != nil {
+		return fmt.Errorf("0020_audit_gate: %w", err)
 	}
 	return nil
 }

@@ -180,7 +180,7 @@ func TestExternalSync_PushAndDelete_EndToEnd(t *testing.T) {
 
 	// Push two plugins.
 	for _, name := range []string{"alpha", "beta"} {
-		render := func(targetDir string) error {
+		render := func(targetDir, _ string) error {
 			if err := os.MkdirAll(targetDir, 0o755); err != nil {
 				return err
 			}

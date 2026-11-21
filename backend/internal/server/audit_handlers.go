@@ -13,9 +13,19 @@ func (a *App) handleListAuditResults(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not load audit results")
 		return
 	}
+	pending, err := a.listAuditPending(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not load pending changes")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":   a.Cfg.AuditEnabled,
-		"onChange":  a.Cfg.AuditOnChange,
+		"enabled":  a.Cfg.AuditEnabled,
+		"onChange": a.Cfg.AuditOnChange,
+		// gate: changes are published only after they pass the audit.
+		"gate": a.auditGateEnabled(),
+		// pending: changes that are saved but not published yet. An entry with
+		// a non-empty error is held because its check failed.
+		"pending":   pending,
 		"threshold": a.Cfg.AuditThreshold,
 		"running":   a.auditRunning.Load(),
 		"results":   results,

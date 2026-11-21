@@ -154,15 +154,29 @@ func (es *externalSync) refreshFromRemote(ctx context.Context) error {
 // pushPlugin re-renders plugins/<pluginName>/ in the local clone via the
 // provided render callback, commits, and pushes. On a non-fast-forward
 // rejection it refreshes from the remote and retries once.
-func (es *externalSync) pushPlugin(ctx context.Context, pluginName string, render func(targetDir string) error) error {
+//
+// render gets the emptied target dir and prevDir, the plugin's tree as the
+// mirror last had it (an empty dir for a plugin that is new to the mirror), so
+// it can carry audit-pending items over unchanged.
+func (es *externalSync) pushPlugin(ctx context.Context, pluginName string, render func(targetDir, prevDir string) error) error {
 	es.mu.Lock()
 	defer es.mu.Unlock()
 	return es.withRetry(ctx, func() error {
 		pluginDir := filepath.Join(es.workDir, "plugins", pluginName)
+		// Move the current tree out of the clone instead of deleting it, so
+		// render can read the last published files from it.
+		prevDir, err := os.MkdirTemp("", "ext-sync-prev-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(prevDir)
+		if _, err := copyPublished(pluginDir, prevDir); err != nil {
+			return fmt.Errorf("snapshot external plugin dir: %w", err)
+		}
 		if err := os.RemoveAll(pluginDir); err != nil {
 			return fmt.Errorf("clean external plugin dir: %w", err)
 		}
-		if err := render(pluginDir); err != nil {
+		if err := render(pluginDir, prevDir); err != nil {
 			return fmt.Errorf("render plugin into external: %w", err)
 		}
 		if err := es.writeRootArtefacts(ctx); err != nil {
@@ -185,7 +199,11 @@ func (es *externalSync) pushPlugin(ctx context.Context, pluginName string, rende
 // The comparison is exact because both the mirror and the temp render are
 // produced by the same deterministic renderer, so an in-sync plugin hashes
 // identically. render(name, dir) must materialise plugin `name` into `dir`.
-func (es *externalSync) checkPlugins(ctx context.Context, names []string, render func(name, dir string) error) (missing, outOfDate, extra []string, err error) {
+//
+// render also gets prevDir — the mirror's current tree for that plugin — so an
+// audit-pending item, which the mirror correctly still holds in its last
+// published form, compares equal instead of showing up as drift.
+func (es *externalSync) checkPlugins(ctx context.Context, names []string, render func(name, dir, prevDir string) error) (missing, outOfDate, extra []string, err error) {
 	es.mu.Lock()
 	defer es.mu.Unlock()
 
@@ -209,7 +227,7 @@ func (es *externalSync) checkPlugins(ctx context.Context, names []string, render
 			return nil, nil, nil, statErr
 		}
 		same, cmpErr := es.renderedMatches(extPath, func(dir string) error {
-			return render(name, dir)
+			return render(name, dir, extPath)
 		})
 		if cmpErr != nil {
 			return nil, nil, nil, cmpErr
@@ -473,8 +491,8 @@ func (a *App) syncExternalPushPlugin(ctx context.Context, p *Plugin) error {
 	if a.ExternalSync == nil {
 		return nil
 	}
-	render := func(targetDir string) error {
-		return a.renderPluginInto(ctx, p, targetDir)
+	render := func(targetDir, prevDir string) error {
+		return a.renderPluginInto(ctx, p, targetDir, prevDir)
 	}
 	if err := a.ExternalSync.pushPlugin(ctx, p.Name, render); err != nil {
 		log.Printf("WARN: external git sync %q: %v", p.Name, err)

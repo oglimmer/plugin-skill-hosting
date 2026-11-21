@@ -1,4 +1,4 @@
-import type { AuthConfig, Plugin, Skill, User } from '../types'
+import type { Agent, AuthConfig, Plugin, Skill, User } from '../types'
 
 // Minimal valid fixtures with sensible defaults; pass overrides for the fields
 // a given test cares about. Keeping these here means a shape change in types.ts
@@ -41,6 +41,23 @@ export function makeSkill(name = 'a-skill', overrides: Partial<Skill> = {}): Ski
     name,
     description: `desc for ${name}`,
     body: '# body',
+    extraFrontmatter: '',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    locked: false,
+    ...overrides,
+  }
+}
+
+export function makeAgent(name = 'an-agent', overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: `a-${name}`,
+    pluginId: 'p-demo',
+    name,
+    description: `desc for ${name}`,
+    body: 'You are an agent.',
+    model: '',
+    tools: '',
     extraFrontmatter: '',
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',

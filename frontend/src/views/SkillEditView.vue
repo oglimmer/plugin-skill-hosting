@@ -221,6 +221,10 @@ const lock = ref<{
 const locked = computed(() => lock.value.locked)
 const lockBusy = ref(false)
 
+// Audit gate state of the loaded skill: its current content is saved but not
+// published until the security check passes (or, with an error, is held).
+const pending = ref<{ pending: boolean; error?: string }>({ pending: false })
+
 // Pristine snapshot of the editable fields. Updated whenever the form's
 // contents match what's persisted on the server (initial load, after save,
 // after revert) so isDirty correctly flips back to false.
@@ -299,6 +303,7 @@ async function load() {
       source: s.lockSource,
       byName: s.lockedByName,
     }
+    pending.value = { pending: !!s.auditPending, error: s.auditPendingError }
     snapshotPristine()
     await loadFiles()
   } catch (e: unknown) {
@@ -662,6 +667,23 @@ watch(() => [props.pluginName, props.skillName], load)
         <p v-if="lock.reason" class="se-lock__reason">reason: {{ lock.reason }}</p>
         <p class="se-lock__hint">
           {{ isAdmin ? 'Unlock it (top right) to restore access and allow edits.' : 'Only an admin can unlock it.' }}
+        </p>
+      </div>
+    </div>
+
+    <!-- Audit gate banner: saved, but not live yet -->
+    <div v-if="isEdit && !locked && pending.pending" class="se-lock se-lock--pending" role="status">
+      <span class="se-lock__badge">{{ pending.error ? '⏸ held' : '⏳ checking' }}</span>
+      <div class="se-lock__body">
+        <p class="se-lock__title">
+          {{ pending.error
+            ? 'The security check for the latest change failed, so that change is not published.'
+            : 'The latest change is saved but not published yet. It goes live when the security check passes.' }}
+          The last published version stays live until then.
+        </p>
+        <p v-if="pending.error" class="se-lock__reason">reason: {{ pending.error }}</p>
+        <p v-if="pending.error" class="se-lock__hint">
+          The check is retried automatically. An admin can also publish the change from the plugin page.
         </p>
       </div>
     </div>
@@ -1273,6 +1295,14 @@ watch(() => [props.pluginName, props.skillName], load)
   padding: 12px 14px;
   border-left: 2px solid var(--rust);
   background: rgb(var(--rust-rgb) / 0.06);
+}
+.se-lock--pending {
+  border-left-color: var(--accent-2);
+  background: var(--bg-2);
+}
+.se-lock--pending .se-lock__badge {
+  color: var(--accent-2);
+  border-color: var(--border);
 }
 .se-lock__badge {
   flex: 0 0 auto;

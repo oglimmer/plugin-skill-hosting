@@ -164,6 +164,12 @@ func NewRouter(app *App) http.Handler {
 					Post("/plugins/{name}/skills/{skill}/lock", app.handleLockSkill)
 				r.With(app.requireAdminMiddleware).
 					Delete("/plugins/{name}/skills/{skill}/lock", app.handleUnlockSkill)
+				// Admin override for the audit gate: publish a pending or held
+				// change without a passed security check.
+				r.With(app.requireAdminMiddleware).
+					Post("/plugins/{name}/skills/{skill}/audit-approve", app.handleApproveSkillAudit)
+				r.With(app.requireAdminMiddleware).
+					Post("/plugins/{name}/agents/{agent}/audit-approve", app.handleApproveAgentAudit)
 				r.Get("/plugins/{name}/deleted-skills", app.handleListDeletedSkills)
 				r.Post("/plugins/{name}/skills/{skill}/restore", app.handleRestoreSkill)
 				r.Get("/plugins/{name}/skills/{skill}/versions", app.handleListSkillVersions)
@@ -172,6 +178,16 @@ func NewRouter(app *App) http.Handler {
 				r.Get("/plugins/{name}/skills/{skill}/files/*", app.handleGetSkillFile)
 				r.Put("/plugins/{name}/skills/{skill}/files/*", app.handleUpsertSkillFile)
 				r.Delete("/plugins/{name}/skills/{skill}/files/*", app.handleDeleteSkillFile)
+				r.Get("/plugins/{name}/agents", app.handleListAgents)
+				r.Post("/plugins/{name}/agents", app.handleCreateAgent)
+				r.Get("/plugins/{name}/agents/{agent}", app.handleGetAgent)
+				r.Put("/plugins/{name}/agents/{agent}", app.handleUpdateAgent)
+				r.Delete("/plugins/{name}/agents/{agent}", app.handleDeleteAgent)
+				// Lock / unlock are admin-only, same as for skills.
+				r.With(app.requireAdminMiddleware).
+					Post("/plugins/{name}/agents/{agent}/lock", app.handleLockAgent)
+				r.With(app.requireAdminMiddleware).
+					Delete("/plugins/{name}/agents/{agent}/lock", app.handleUnlockAgent)
 				r.Post("/skills/validate", app.handleValidateSkill)
 				r.Post("/skills/finding-fix", app.handleFixFinding)
 			})

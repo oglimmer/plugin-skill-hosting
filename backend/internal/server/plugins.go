@@ -181,6 +181,12 @@ func (a *App) handleGetPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.Skills = skills
+	agents, err := a.loadAgentsForPlugin(r.Context(), p.ID)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	p.Agents = agents
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -288,6 +294,12 @@ func (a *App) handleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated.Skills = skills
+	agents, err := a.loadAgentsForPlugin(r.Context(), updated.ID)
+	if err != nil {
+		serverErr(w, r, err, "db error")
+		return
+	}
+	updated.Agents = agents
 	metrics.PluginMutationsTotal.WithLabelValues("update", "success").Inc()
 	writeJSON(w, http.StatusOK, updated)
 }

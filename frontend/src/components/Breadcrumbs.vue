@@ -36,6 +36,12 @@ const trail = computed<Crumb[]>(() => {
       }
       return [HOME, pluginCrumb, { label: params.skillName }]
     }
+    if (params.agentName) {
+      return [HOME, pluginCrumb, { label: params.agentName }]
+    }
+    if (path.endsWith('/agents/new')) {
+      return [HOME, pluginCrumb, { label: 'New agent' }]
+    }
     if (path.endsWith('/skills/new')) {
       return [HOME, pluginCrumb, { label: 'New skill' }]
     }

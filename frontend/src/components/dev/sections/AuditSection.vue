@@ -69,6 +69,37 @@ const envVars = [
         <a href="#rest/skills">skill endpoints</a> for the lock/unlock API.
       </li>
       <li>
+        <strong>Publish gate — check first, publish after.</strong> With
+        <code>AUDIT_ON_CHANGE=true</code> a new or changed skill or agent is saved
+        but <em>not published</em> until its check passes. Meanwhile git, the
+        external mirror and so Claude Code keep the last published version (a new
+        item is simply absent), and the rest of the plugin publishes as usual. A
+        clean verdict publishes the change; a harmful one locks the item, so
+        harmful content never reaches git. If the check itself fails (the model API
+        is down) the change is <strong>held</strong>: it stays unpublished, admins
+        get one alert, the check is retried every few minutes, and an admin can
+        publish it by hand with
+        <code>POST /api/plugins/{name}/skills/{skill}/audit-approve</code> (or
+        <code>…/agents/{agent}/audit-approve</code>). Items carry
+        <code>auditPending</code> / <code>auditPendingError</code> in the REST API,
+        and <code>GET /api/audit/results</code> lists them under
+        <code>pending</code>. With <code>AUDIT_ON_CHANGE</code> off, changes publish
+        immediately and anything still held is released at startup.
+      </li>
+      <li>
+        <strong>Plugin agents are audited too</strong>, with the same schedule,
+        threshold, alert email and auto-lock. An agent has no supporting files, so
+        the audit sends its frontmatter values (model, tools, further keys) and its
+        system prompt. The on-change audit (<code>AUDIT_ON_CHANGE</code>) runs when
+        an agent is created or edited. Unlock with
+        <code>DELETE /api/plugins/{name}/agents/{agent}/lock</code>; see the
+        <a href="#rest/agents">agent endpoints</a>. In the results below, an agent
+        has <code>"kind": "agent"</code> with <code>agentId</code> /
+        <code>agentName</code> in place of <code>skillId</code> /
+        <code>skillName</code>, and on <code>/metrics</code> its
+        <code>skill</code> label is <code>agent:&lt;name&gt;</code>.
+      </li>
+      <li>
         The same signal is also published on <code>/metrics</code> for alerting
         that doesn't depend on SMTP: <code>psh_skill_audit_flagged_skills</code>
         (skills at/above the threshold as of the last sweep — alert on
@@ -128,6 +159,7 @@ const envVars = [
   "running":   false,
   "results": [
     {
+      "kind":       "skill",       // or "agent" (then agentId / agentName)
       "skillId":    "…",
       "pluginName": "my-tools",
       "skillName":  "deploy",

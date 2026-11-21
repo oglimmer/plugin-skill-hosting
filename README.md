@@ -22,6 +22,7 @@ When a Claude Code user adds a marketplace, two things happen:
    - `.claude-plugin/plugin.json` — plugin manifest
    - `skills/<skill-name>/SKILL.md` — one file per skill, with YAML frontmatter
    - `skills/<skill-name>/{scripts,references,assets}/…` — optional supporting files for multi-file skills
+   - `agents/<agent-name>.md` — one file per plugin agent (subagent); Claude Code exposes it as the agent type `<plugin>:<agent-name>`
    - `README.md`
 
 The backend keeps Postgres as the source of truth. Whenever you create, edit, or delete a plugin/skill via the API (or via MCP), it **materialises** the plugin into a working tree (seeded from the existing bare history when present), commits, and fast-forward pushes to a bare repo on disk under `/data/repos/<plugin>.git`. That bare repo is served via git smart HTTP using [`gitkit`](https://github.com/sosedoff/gitkit), which wraps `git http-backend`.
@@ -149,13 +150,16 @@ Tools exposed:
 | Tool | Mode | Purpose |
 | --- | --- | --- |
 | `list_plugins` | read | List all active plugins |
-| `get_plugin` | read | Plugin metadata + skill list |
+| `get_plugin` | read | Plugin metadata + skill list + agent list |
 | `get_skill` | read | A skill's description, SKILL.md body, and file list |
 | `list_skill_files` | read | Paths + sizes of supporting files |
 | `get_skill_file` | read | One file's content; binary returned as base64 |
 | `create_skill` | write | Add a new skill to a plugin |
 | `update_skill` | write | Replace a skill's description and body |
 | `upsert_skill_file` | write | Create or overwrite a supporting file under `scripts/`, `references/`, or `assets/` |
+| `get_agent` | read | A plugin agent's description, system prompt, model, tools, and further frontmatter |
+| `create_agent` | write | Add a new agent (subagent) to a plugin, published as `agents/<name>.md` |
+| `update_agent` | write | Replace an agent's description and system prompt; optionally its model, tools, and further frontmatter |
 | `get_marketplace_url` | read | The caller's personal marketplace URL and the `claude plugin marketplace add` command for it |
 
 The server also exposes one prompt, `setup_marketplace`, which asks the client to call `get_marketplace_url` and run the command.
@@ -292,12 +296,20 @@ The job is **on by default** but is a no-op without `ANTHROPIC_API_KEY` (it logs
 Mechanics:
 
 - One Claude call per skill, on `AUDIT_INTERVAL`. On startup the sweep runs immediately only if the most recent stored audit is older than one interval (or none exists), so frequent restarts don't re-audit on every launch.
-- **On-change auditing** (`AUDIT_ON_CHANGE=true`, off by default) audits a *single* skill the moment it is created or changed — its `SKILL.md`, metadata, or any attached file — instead of waiting for the next scheduled sweep. It runs in the background (the mutation request returns immediately) and reuses the same threshold, auto-lock, and alert behavior below. It is independent of `AUDIT_ENABLED`: you can run on-change auditing with the scheduled sweep off, or both together. Like the sweep, it needs `ANTHROPIC_API_KEY`.
+- **On-change auditing with a publish gate** (`AUDIT_ON_CHANGE=true`, off by default) checks a *single* skill or agent the moment it is created or changed — its `SKILL.md`, metadata, any attached file, a restore or a revert — and **publishes the change only after the check passes**. It is independent of `AUDIT_ENABLED`: you can run it with the scheduled sweep off, or both together. Like the sweep, it needs `ANTHROPIC_API_KEY`. How the gate behaves:
+  - The write request returns at once; the change is saved and marked `auditPending`. The check runs in the background.
+  - Until the check passes, git, the external mirror, and so Claude Code keep the **last published version** (a brand-new item is simply absent). Everything else in the plugin publishes as usual.
+  - A clean verdict publishes the change. A verdict at or above the threshold locks the item (see below), so harmful content never reaches git.
+  - **Fail closed:** if the check itself fails (the model API is down, the reply cannot be parsed), the change is **held** — it stays unpublished, `AUDIT_ALERT_EMAILS` gets one alert, and the check is retried every few minutes. An admin can publish a held change by hand (`POST …/audit-approve`, or "publish unchecked" on the plugin page). An API outage therefore pauses publishing of changed items until it ends.
+  - A verdict only counts for the content it was started for: saving again while a check runs starts a new check, and the older verdict cannot publish the newer content.
+  - Turning `AUDIT_ON_CHANGE` off publishes immediately again; anything still held is released at the next startup.
+  - Version numbers still bump at save time, so a version can exist in `marketplace.json` a few seconds before its content does.
 - Each call scores the skill `0–100` (`low`/`medium`/`high`/`critical`), with threat categories, a one-line summary, and per-finding details. The server recomputes the level from the score, so the model can't under-report severity.
 - **Unlike the skill validator**, the audit sends supporting-file *contents* (scripts, references) to the model — malicious payloads typically hide there rather than in `SKILL.md`. Text files are capped per file; binary files are listed by path/size only. Note that this means skill file contents leave your infrastructure on each run.
 - Skills scoring at or above `AUDIT_ALERT_THRESHOLD` trigger a single batched alert email per sweep. When SMTP is unconfigured (or no recipients are set) the alert is written to the logs instead, never dropped.
 - A skill scoring at or above the threshold is also **auto-locked**: withdrawn from the git repo, the external mirror, and the MCP server, but kept visible (read-only, flagged locked) in the web UI. An admin unlocks it with `DELETE /api/plugins/:name/skills/:skill/lock`, which acknowledges the finding so later sweeps won't re-lock it until the skill is next edited. Admins can also lock a skill manually with `POST .../lock`. See [§API surface](#api-surface).
 - The same signal is also published on `/metrics` for alerting that doesn't depend on SMTP: `psh_skill_audit_flagged_skills` (skills at/above the threshold as of the last sweep — alert on `> 0`), `psh_skill_audit_risk_score{plugin,skill,level}` (latest per-skill score, repopulated each sweep), and `psh_skill_audit_last_run_timestamp_seconds` (so a stalled sweep is detectable via `time() - metric > 2 * interval`).
+- **Plugin agents are audited too**, on the same schedule and on change, with the same threshold, alert, and auto-lock. An agent has no supporting files, so the audit sends its frontmatter values (model, tools, further keys) and its system prompt body. In `GET /api/audit/results` an agent verdict has `"kind": "agent"` with `agentId` / `agentName`; on `/metrics` its `skill` label is `agent:<name>`.
 - A failed audit for one skill (API error, unparseable output) is recorded with its error and skipped — the sweep continues. Overlapping sweeps are prevented; a manual trigger while one is running returns `409`.
 
 Under Helm, set the `audit` and `smtp` blocks in `values.yaml`; `SMTP_PASSWORD` goes into the application secret alongside the other optional keys.
@@ -435,7 +447,7 @@ Token-gated (Bearer JWT or API token; HTTP Basic with token as password is also 
 
 *Admin*
 - `POST /api/external-git/sync-out` — re-materialize every DB plugin into the external repo (one-shot bootstrap when enabling sync on a populated DB)
-- `GET /api/audit/results` — latest security-audit verdict per skill (risk score, level, categories, findings), ordered by risk descending
+- `GET /api/audit/results` — latest security-audit verdict per skill and agent (risk score, level, categories, findings), ordered by risk descending; also `gate` (publish gate on/off) and `pending` (changes saved but not published yet)
 - `POST /api/audit/run` — trigger an on-demand audit sweep in the background (`202`; `409` if one is already running)
 
 *Plugins*
@@ -451,6 +463,12 @@ Token-gated (Bearer JWT or API token; HTTP Basic with token as password is also 
 - `DELETE /api/plugins/:name/skills/:skill` — soft-delete
 - `POST /api/plugins/:name/skills/:skill/lock` `{reason?}` — lock a skill (admin only); withdraws it from git, the external mirror, and MCP while leaving it read-only in the UI. Auto-applied by the audit when a skill crosses the threshold. A locked skill rejects content writes with `403`, except that an admin may still **delete** it outright (removal can't republish withdrawn content).
 - `DELETE /api/plugins/:name/skills/:skill/lock` — unlock a skill (admin only); restores it to git/MCP. Unlocking an audit lock suppresses re-locking until the skill is next edited.
+- `POST /api/plugins/:name/skills/:skill/audit-approve`, `POST /api/plugins/:name/agents/:agent/audit-approve` — publish a pending or held change without a passed security check (admin only); `409` if nothing is pending
+- `GET /api/plugins/:name/agents`, `GET /api/plugins/:name/agents/:agent` — list / read plugin agents (subagents)
+- `POST /api/plugins/:name/agents` `{name, description, body, model?, tools?, extraFrontmatter?}` — create an agent; published as `agents/<name>.md`
+- `PUT /api/plugins/:name/agents/:agent` `{description, body, model?, tools?, extraFrontmatter?}` — update an agent (omitted optional fields keep their value)
+- `DELETE /api/plugins/:name/agents/:agent` — delete an agent permanently (plugin owner, admin, or the agent's creator; admin only while locked)
+- `POST` / `DELETE /api/plugins/:name/agents/:agent/lock` — lock / unlock an agent (admin only), same behavior as the skill lock
 - `GET /api/plugins/:name/deleted-skills` — list soft-deleted skills for the restore UI
 - `POST /api/plugins/:name/skills/:skill/restore` — un-soft-delete
 - `GET /api/plugins/:name/skills/:skill/versions` — full edit history (newest first)
@@ -480,6 +498,21 @@ my-tools/
 │       └── SKILL.md
 └── README.md
 ```
+
+A plugin can also ship **agents** (subagents). Each one is rendered to `agents/<name>.md` at the plugin root, and Claude Code exposes it as the agent type `<plugin>:<name>` (for example `subagent_type: "my-tools:worker"`):
+
+```markdown
+---
+name: worker
+description: When Claude should hand a task to this agent
+model: opus            # optional: opus | sonnet | haiku | inherit | a model id
+tools: Read, Edit      # optional: comma-separated allowlist; omit to inherit all tools
+---
+
+You are a worker. (The body is the agent's system prompt.)
+```
+
+Agents are managed on the plugin page ("agents" tab), through `/api/plugins/{name}/agents`, and through the MCP tools `get_agent` / `create_agent` / `update_agent`. Creating or deleting an agent bumps the plugin major; editing one bumps minor or patch. Unlike skills, agents have no version history and no soft-delete: a delete is permanent. Like skills, agents are covered by the security audit (scheduled and on-change) and can be locked by an admin or by the audit; a locked agent is withdrawn from git, the external mirror, and MCP.
 
 `SKILL.md` shape:
 ```markdown
@@ -521,7 +554,8 @@ The tool is intentionally not idempotent: if a plugin with the same name already
 - A SaaS product with clear tenant separation — it is a single-tenant sharing platform for one organization, with no isolation between users
 - User/Password has no email verification, password reset as it's only for dev testing
 - No SKILL.md frontmatter beyond `name` and `description` (no `allowed-tools`, `arguments`, etc.)
-- A plugin may contain skills only — no commands, agents, hooks, or bundled MCP servers as plugin contents. (This service *exposes* its own MCP server at `/mcp` so clients can edit skills, but the plugins it hosts can still only ship skills.)
+- A plugin may contain skills and agents only — no commands, hooks, or bundled MCP servers as plugin contents. (This service *exposes* its own MCP server at `/mcp` so clients can edit skills and agents, but the plugins it hosts can still only ship those two.)
+- The `import-plugin` CLI imports skills only; an `agents/` folder in the source plugin is not imported.
 
 Each of these is straightforward to add later — the data model and API leave room.
 

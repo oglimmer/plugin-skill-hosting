@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { api, errMsg, errStatus } from '../api'
-import type { Skill } from '../types'
+import type { Agent, Skill } from '../types'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import ErrorView from './ErrorView.vue'
 import { useAuthStore } from '../stores/auth'
@@ -59,6 +59,9 @@ const visibleSkills = computed(() => {
     }),
   )
 })
+const sortedAgents = computed(() =>
+  [...(plugin.value?.agents ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
+)
 const loading = ref(true)
 const error = ref('')
 // When the *initial load* fails (missing plugin, server error) we take over
@@ -67,7 +70,7 @@ const error = ref('')
 // loaded plugin stays on screen.
 const loadErrorCode = ref<number | null>(null)
 const copied = ref('')
-const activeTab = ref<'skills' | 'connect'>('skills')
+const activeTab = ref<'skills' | 'agents' | 'connect'>('skills')
 // In enterprise mode the manual install command is tucked behind expert mode,
 // since plugins are normally enabled fleet-wide via managed settings.
 const expertMode = ref(false)
@@ -146,9 +149,9 @@ async function restoreSkill(name: string) {
   }
 }
 
-// lockTitle composes the hover tooltip for a locked skill: how it was locked,
-// by whom, and why.
-function lockTitle(s: Skill): string {
+// lockTitle composes the hover tooltip for a locked skill or agent: how it was
+// locked, by whom, and why.
+function lockTitle(s: Skill | Agent): string {
   if (!s.locked) return ''
   const who = s.lockSource === 'audit' ? 'security audit' : (s.lockedByName || 'an admin')
   const parts = [`locked by ${who}`]
@@ -185,6 +188,91 @@ async function unlockSkill(name: string) {
   if (!ok) return
   try {
     await api.unlockSkill(plugin.value.name, name)
+    await load()
+  } catch (e: unknown) {
+    error.value = errMsg(e)
+  }
+}
+
+// ─── Audit gate ─────────────────────────────────────────────────────
+// A pending item is saved but not published until its security check passes.
+// "checking" resolves on its own within seconds, so the page polls quietly
+// while anything is in that state. "held" means the check failed: it stays
+// until a retry passes or an admin publishes it, so it is not polled for.
+function pendingTitle(it: Skill | Agent): string {
+  if (it.auditPendingError) {
+    return `the security check failed, so this change is not published: ${it.auditPendingError}`
+  }
+  return 'saved — not published yet. it goes live when the security check passes. the last published version stays live until then.'
+}
+const hasChecking = computed(() => {
+  const items: (Skill | Agent)[] = [...(plugin.value?.skills ?? []), ...(plugin.value?.agents ?? [])]
+  return items.some(it => it.auditPending && !it.auditPendingError)
+})
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+function schedulePoll() {
+  clearTimeout(pollTimer)
+  if (!hasChecking.value) return
+  pollTimer = setTimeout(async () => {
+    try {
+      // A quiet refresh: no loading state, and a failure just stops the poll.
+      await pluginStore.loadPlugin(route.params.name as string)
+    } catch {
+      return
+    }
+    schedulePoll()
+  }, 4000)
+}
+watch(hasChecking, schedulePoll)
+onUnmounted(() => clearTimeout(pollTimer))
+
+// Admin-only: publish a pending or held change without a passed check.
+async function approvePending(kind: 'skill' | 'agent', name: string) {
+  if (!plugin.value) return
+  const ok = await confirm({
+    title: `Publish ${kind} "${name}" without a security check`,
+    message: 'This change has not passed the security check. Publishing it puts the content in git and in front of every user of this plugin. Only do this if you have read the change yourself.',
+    confirmLabel: 'Publish unchecked',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    if (kind === 'skill') await api.approveSkillAudit(plugin.value.name, name)
+    else await api.approveAgentAudit(plugin.value.name, name)
+    await load()
+  } catch (e: unknown) {
+    error.value = errMsg(e)
+  }
+}
+
+// Admin-only, same behaviour as for skills.
+async function lockAgent(name: string) {
+  if (!plugin.value) return
+  const reason = await prompt({
+    title: `Lock agent "${name}"`,
+    message: 'Locking withdraws this agent from git, the external mirror, and MCP. It stays visible here, marked as locked. Add an optional reason:',
+    placeholder: 'e.g. under security review',
+    confirmLabel: 'Lock agent',
+  })
+  if (reason === null) return
+  try {
+    await api.lockAgent(plugin.value.name, name, reason)
+    await load()
+  } catch (e: unknown) {
+    error.value = errMsg(e)
+  }
+}
+
+async function unlockAgent(name: string) {
+  if (!plugin.value) return
+  const ok = await confirm({
+    title: `Unlock agent "${name}"`,
+    message: 'This restores the agent to git, the external mirror, and MCP. If the audit locked it automatically, future audit runs will not re-lock it until it is edited.',
+    confirmLabel: 'Unlock',
+  })
+  if (!ok) return
+  try {
+    await api.unlockAgent(plugin.value.name, name)
     await load()
   } catch (e: unknown) {
     error.value = errMsg(e)
@@ -306,6 +394,17 @@ watch(() => route.params.name, load)
         type="button"
         class="pd-tab"
         role="tab"
+        :class="{ 'pd-tab--active': activeTab === 'agents' }"
+        :aria-selected="activeTab === 'agents'"
+        @click="activeTab = 'agents'"
+      >
+        agents
+        <span class="pd-tab__count">[{{ plugin.agents?.length ?? 0 }}]</span>
+      </button>
+      <button
+        type="button"
+        class="pd-tab"
+        role="tab"
         :class="{ 'pd-tab--active': activeTab === 'connect' }"
         :aria-selected="activeTab === 'connect'"
         @click="activeTab = 'connect'"
@@ -375,6 +474,12 @@ watch(() => route.params.name, load)
                 <span v-if="s.locked" class="pd-lock" :title="lockTitle(s)">
                   🔒 locked<span v-if="s.lockSource === 'audit'" class="pd-lock__src"> · audit</span>
                 </span>
+                <span
+                  v-else-if="s.auditPending"
+                  class="pd-pending"
+                  :class="{ 'pd-pending--held': s.auditPendingError }"
+                  :title="pendingTitle(s)"
+                >{{ s.auditPendingError ? '⏸ held · check failed' : '⏳ checking · not live yet' }}</span>
               </td>
               <td class="pd-table__desc">{{ s.description }}</td>
               <td class="pd-table__when">
@@ -382,6 +487,12 @@ watch(() => route.params.name, load)
                 <span class="pd-table__when-time">{{ fmtTime(s.updatedAt) }}</span>
               </td>
               <td v-if="isAdmin" class="pd-table__act">
+                <button
+                  v-if="s.auditPending && !s.locked"
+                  type="button"
+                  class="pd-btn pd-btn--danger"
+                  @click="approvePending('skill', s.name)"
+                >publish unchecked</button>
                 <button
                   v-if="!s.locked"
                   type="button"
@@ -442,6 +553,91 @@ watch(() => route.params.name, load)
           </tbody>
         </table>
       </details>
+    </section>
+
+    <!-- AGENTS tab -->
+    <section v-show="activeTab === 'agents'" role="tabpanel">
+      <div class="pd-toolbar">
+        <span class="pd-toolbar__count" v-if="plugin.agents?.length">
+          {{ plugin.agents.length }} agent{{ plugin.agents.length === 1 ? '' : 's' }}
+        </span>
+        <span class="spacer"></span>
+        <RouterLink
+          v-if="isAuthed"
+          :to="`/plugins/${plugin.name}/agents/new`"
+          class="pd-btn pd-btn--primary"
+        >+ new agent</RouterLink>
+      </div>
+
+      <div v-if="sortedAgents.length === 0" class="pd-empty">
+        <p class="pd-empty__line">
+          <span class="pd-empty__prompt">$</span>
+          no agents yet
+        </p>
+        <p class="pd-empty__hint">
+          an agent is a subagent that ships with this plugin. claude code
+          exposes it as the agent type <code>{{ plugin.name }}:&lt;agent-name&gt;</code>.
+        </p>
+      </div>
+
+      <table v-else class="pd-table">
+        <thead>
+          <tr>
+            <th>name</th>
+            <th>description</th>
+            <th>model</th>
+            <th>updated</th>
+            <th v-if="isAdmin" class="pd-th pd-th--admin">lock</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="ag in sortedAgents" :key="ag.id" :class="{ 'pd-row--locked': ag.locked }">
+            <td class="pd-table__name">
+              <RouterLink
+                v-if="isAuthed"
+                :to="`/plugins/${plugin.name}/agents/${ag.name}/edit`"
+              >{{ ag.name }}</RouterLink>
+              <span v-else>{{ ag.name }}</span>
+              <span v-if="ag.locked" class="pd-lock" :title="lockTitle(ag)">
+                🔒 locked<span v-if="ag.lockSource === 'audit'" class="pd-lock__src"> · audit</span>
+              </span>
+              <span
+                v-else-if="ag.auditPending"
+                class="pd-pending"
+                :class="{ 'pd-pending--held': ag.auditPendingError }"
+                :title="pendingTitle(ag)"
+              >{{ ag.auditPendingError ? '⏸ held · check failed' : '⏳ checking · not live yet' }}</span>
+              <code class="pd-agent-type">{{ plugin.name }}:{{ ag.name }}</code>
+            </td>
+            <td class="pd-table__desc">{{ ag.description }}</td>
+            <td class="pd-table__when">{{ ag.model || 'default' }}</td>
+            <td class="pd-table__when">
+              <span class="pd-table__when-date">{{ fmtDate(ag.updatedAt) }}</span>
+              <span class="pd-table__when-time">{{ fmtTime(ag.updatedAt) }}</span>
+            </td>
+            <td v-if="isAdmin" class="pd-table__act">
+              <button
+                v-if="ag.auditPending && !ag.locked"
+                type="button"
+                class="pd-btn pd-btn--danger"
+                @click="approvePending('agent', ag.name)"
+              >publish unchecked</button>
+              <button
+                v-if="!ag.locked"
+                type="button"
+                class="pd-btn"
+                @click="lockAgent(ag.name)"
+              >lock</button>
+              <button
+                v-else
+                type="button"
+                class="pd-btn pd-btn--unlock"
+                @click="unlockAgent(ag.name)"
+              >unlock</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
     <!-- CONNECT & META tab -->
@@ -886,6 +1082,16 @@ watch(() => route.params.name, load)
   transition: color 0.12s ease;
 }
 .pd-table__name a:hover { color: var(--accent); }
+.pd-agent-type {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
 .pd-lock {
   display: inline-flex;
   align-items: center;
@@ -903,6 +1109,27 @@ watch(() => route.params.name, load)
   vertical-align: middle;
 }
 .pd-lock__src { color: var(--muted); font-weight: 500; }
+.pd-pending {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.pd-pending--held {
+  color: var(--rust);
+  border-color: rgb(var(--rust-rgb) / 0.5);
+  background: rgb(var(--rust-rgb) / 0.06);
+}
 .pd-row--locked { background: rgb(var(--rust-rgb) / 0.03); }
 .pd-row--locked .pd-table__desc { color: var(--muted); }
 .pd-th--admin { text-align: right; white-space: nowrap; }
